@@ -1,5 +1,5 @@
 #!/bin/bash
-# BM Cam Remote installer (macOS).
+# LUCam iPhone Remote installer (macOS).
 #
 #   ./install.sh             install or update (asks before installing Homebrew)
 #   ./install.sh --yes       don't ask, install whatever is missing
@@ -12,8 +12,8 @@
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LAUNCHER_NAME="bmcam-remote"
-COMMAND_FILE="$APP_DIR/BM Cam Remote.command"
+LAUNCHER_NAME="lucam-remote"
+COMMAND_FILE="$APP_DIR/LUCam iPhone Remote.command"
 YES=0
 UNINSTALL=0
 for arg in "$@"; do
@@ -52,16 +52,19 @@ launcher_dir() {
 	if brew="$(find_brew)"; then echo "$("$brew" --prefix)/bin"; else echo "$HOME/.local/bin"; fi
 }
 
+# Launchers from before the app was renamed (BM Cam Remote).
+LEGACY_FILES=("$(launcher_dir)/bmcam-remote" "$HOME/.local/bin/bmcam-remote" "$APP_DIR/BM Cam Remote.command")
+
 if [ "$UNINSTALL" = 1 ]; then
-	bold "Removing BM Cam Remote launchers"
-	for f in "$(launcher_dir)/$LAUNCHER_NAME" "$HOME/.local/bin/$LAUNCHER_NAME" "$COMMAND_FILE"; do
+	bold "Removing LUCam iPhone Remote launchers"
+	for f in "$(launcher_dir)/$LAUNCHER_NAME" "$HOME/.local/bin/$LAUNCHER_NAME" "$COMMAND_FILE" "${LEGACY_FILES[@]}"; do
 		if [ -e "$f" ]; then rm -f "$f"; ok "removed $f"; fi
 	done
 	ok "Done. This folder, cameras.json and Homebrew packages were left in place."
 	exit 0
 fi
 
-bold "BM Cam Remote installer"
+bold "LUCam iPhone Remote installer"
 echo "  folder: $APP_DIR"
 
 # --- Homebrew ---------------------------------------------------------------
@@ -120,11 +123,14 @@ fi
 
 # --- Launchers ----------------------------------------------------------------------
 bold "Launchers"
+for f in "${LEGACY_FILES[@]}"; do
+	if [ -e "$f" ]; then rm -f "$f"; ok "removed old launcher $f"; fi
+done
 BIN="$(launcher_dir)"
 mkdir -p "$BIN"
 cat > "$BIN/$LAUNCHER_NAME" <<EOF
 #!/bin/bash
-# BM Cam Remote launcher, written by $APP_DIR/install.sh
+# LUCam iPhone Remote launcher, written by $APP_DIR/install.sh
 exec "$PYTHON" "$APP_DIR/server.py" "\$@"
 EOF
 chmod +x "$BIN/$LAUNCHER_NAME"
@@ -136,7 +142,7 @@ esac
 
 cat > "$COMMAND_FILE" <<EOF
 #!/bin/bash
-# Double-click to start BM Cam Remote and open the control panel.
+# Double-click to start LUCam iPhone Remote and open the control panel.
 exec "$PYTHON" "$APP_DIR/server.py" --open
 EOF
 chmod +x "$COMMAND_FILE"
@@ -144,12 +150,12 @@ ok "double-click: $(basename "$COMMAND_FILE") (in this folder; drag it to the Do
 
 # --- Check --------------------------------------------------------------------------
 bold "Check"
-"$PYTHON" -c "import sys; sys.path.insert(0, '$APP_DIR/python'); import bmcam" || fail "the controller failed to load"
+"$PYTHON" -c "import sys; sys.path.insert(0, '$APP_DIR/python'); import lucam" || fail "the controller failed to load"
 "$PYTHON" "$APP_DIR/server.py" --help >/dev/null || fail "server.py failed to start"
 ok "controller loads"
 
 echo
 bold "Installed. Start it with:  $LAUNCHER_NAME --open"
-echo "  or double-click 'BM Cam Remote.command'. The panel is at http://localhost:9980"
+echo "  or double-click 'LUCam iPhone Remote.command'. The panel is at http://localhost:9980"
 echo "  and http://$(ipconfig getifaddr en0 2>/dev/null || echo '<this-mac-ip>'):9980 from other devices."
 echo "  First run: allow 'Local Network' access when macOS asks, or cameras won't be found."

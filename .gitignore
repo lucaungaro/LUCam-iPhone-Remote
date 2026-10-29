@@ -3,4 +3,5 @@ __pycache__/
 .DS_Store
 cameras.json
 cameras.json.tmp
+LUCam iPhone Remote.command
 BM Cam Remote.command

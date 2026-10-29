@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BM Cam Remote</title>
+<title>LUCam iPhone Remote</title>
 <style>
 :root {
 	--bg: #0d0e10;
@@ -137,11 +137,11 @@ main { padding: 12px 16px 40px; }
 </head>
 <body>
 <header>
-	<h1>BM Cam Remote</h1>
+	<h1>LUCam iPhone Remote</h1>
 	<span class="sub" id="summary">–</span>
 	<span class="conn"><span class="dot" id="connDot"></span><span id="connText">connecting…</span></span>
 	<span class="spacer"></span>
-	<a class="btn" href="/live" target="bmcam-multiview">Multiview</a>
+	<a class="btn" href="/live" target="lucam-multiview">Multiview</a>
 	<button class="btn rec big" id="recAll"><span class="led"></span>REC ALL</button>
 	<button class="btn stop big" id="stopAll">■ STOP ALL</button>
 </header>
@@ -470,7 +470,7 @@ function buildRow(cam) {
 			if (v === 'awb') act(base + '/autowb');
 			if (v === 'live') {
 				// open the window synchronously so popup blockers allow it
-				window.open('/live/' + cam.id, 'bmcam-live-' + cam.id);
+				window.open('/live/' + cam.id, 'lucam-live-' + cam.id);
 				if (!r.cam.liveOurs) act(base + '/stream', { enabled: true });
 			}
 			if (v === 'stoplive') act(base + '/stream', { enabled: false });

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BM Cam Remote: control iPhones running Blackmagic Camera from a web page.
+"""LUCam iPhone Remote: control iPhones running Blackmagic Camera from a web page.
 
     python3 server.py [--port 9980] [--open]
 
@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(ROOT, 'python'))
 
-from bmcam import CameraManager  # noqa: E402
+from lucam import CameraManager  # noqa: E402
 
 
 class Server(ThreadingHTTPServer):
@@ -69,7 +69,7 @@ def main():
 
 	server = Server(('0.0.0.0', args.port), Handler)
 	url = 'http://localhost:{}/'.format(args.port)
-	print('BM Cam Remote on {}  (Ctrl-C to quit)'.format(url), flush=True)
+	print('LUCam iPhone Remote on {}  (Ctrl-C to quit)'.format(url), flush=True)
 	if args.open:
 		threading.Timer(0.5, webbrowser.open, args=(url,)).start()
 	try:

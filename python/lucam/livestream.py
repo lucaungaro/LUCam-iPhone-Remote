@@ -20,9 +20,10 @@ RTMP_PORT = 1935
 WEBRTC_PORT = 8889
 API = 'http://127.0.0.1:9997'
 
-PLATFORM_NAME = 'BM Cam Remote'          # the phone lists it as "BM Cam Remote RTMP"
+PLATFORM_NAME = 'LUCam iPhone Remote'          # the phone lists it as "LUCam iPhone Remote RTMP"
 PLATFORM_ID = PLATFORM_NAME + ' RTMP'
-PLATFORM_FILE = 'BMCamRemote.xml'
+PLATFORM_FILE = 'LUCamiPhoneRemote.xml'
+LEGACY_PLATFORM_FILES = ('BMCamRemote.xml',)  # from before the rename; removed from phones
 PROFILE = 'Preview'
 
 # The app only streams when a profile config matches the camera's current
@@ -102,7 +103,7 @@ class LiveServer:
 			if not binary:
 				raise RuntimeError('MediaMTX is not installed (brew install mediamtx)')
 			if not self._config_path:
-				fd, self._config_path = tempfile.mkstemp(prefix='bmcam-mediamtx-', suffix='.yml')
+				fd, self._config_path = tempfile.mkstemp(prefix='lucam-mediamtx-', suffix='.yml')
 				with os.fdopen(fd, 'w') as f:
 					f.write(MEDIAMTX_CONFIG.format(rtmp=RTMP_PORT, webrtc=WEBRTC_PORT))
 			self._proc = subprocess.Popen([binary, self._config_path],

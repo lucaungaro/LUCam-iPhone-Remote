@@ -106,7 +106,7 @@ class CameraWorker(threading.Thread):
 	RETRY_OFFLINE = 2.0
 
 	def __init__(self, manager, cam_id, address, name='', active=True, live_mode=False, saved_format=None):
-		super().__init__(name='bmcam-' + cam_id, daemon=True)
+		super().__init__(name='lucam-' + cam_id, daemon=True)
 		self.manager = manager
 		# Live mode: the camera temporarily records H.264 1080p so it can stream;
 		# `saved_format` is its real recording format, restored on exit and before REC.
@@ -254,7 +254,14 @@ class CameraWorker(threading.Thread):
 		except RuntimeError as e:
 			raise api.ApiError(0, str(e))
 		rtmp_url = 'rtmp://{}:{}/live'.format(livestream.local_ip_toward(c.host), livestream.RTMP_PORT)
-		current = c.platform(livestream.PLATFORM_ID) if livestream.PLATFORM_ID in (c.get('/livestreams/platforms') or []) else {}
+		platforms = c.get('/livestreams/platforms') or []
+		if 'BM Cam Remote RTMP' in platforms:
+			for legacy in livestream.LEGACY_PLATFORM_FILES:
+				try:
+					c.request('DELETE', '/livestreams/customPlatforms/' + legacy)
+				except api.ApiError:
+					pass
+		current = c.platform(livestream.PLATFORM_ID) if livestream.PLATFORM_ID in platforms else {}
 		configs = sum(len(p.get('configs', [])) for p in current.get('profiles', []))
 		urls = [s.get('url') for s in current.get('servers', [])]
 		if rtmp_url not in urls or configs != len(livestream.STREAM_RATES) * len(livestream.STREAM_BITRATES):
@@ -853,7 +860,7 @@ class CameraManager:
 				threading.Thread(target=w.do_record, args=(recording, go, reason), daemon=True).start()
 			go.set()
 
-		threading.Thread(target=run, name='bmcam-record', daemon=True).start()
+		threading.Thread(target=run, name='lucam-record', daemon=True).start()
 
 	def _exit_live_all(self, workers):
 		"""Restore formats in parallel; returns {cam_id: error} for failures."""
@@ -896,7 +903,7 @@ class CameraManager:
 			with self.lock:
 				self.discovery.update(running=False, results=results, error=err, finished=time.time())
 
-		threading.Thread(target=job, name='bmcam-discovery', daemon=True).start()
+		threading.Thread(target=job, name='lucam-discovery', daemon=True).start()
 
 	# --- state ----------------------------------------------------------------------
 

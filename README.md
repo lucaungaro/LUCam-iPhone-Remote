@@ -1,4 +1,4 @@
-# BM Cam Remote
+# LUCam iPhone Remote
 
 Control several iPhones running **Blackmagic Camera** (app 3.4 or later) from a
 web page, through the app's REST API (`/control/api/v1`).
@@ -15,7 +15,7 @@ web page, through the app's REST API (`/control/api/v1`).
 ```
 install.sh         installer for macOS (see below)
 server.py          the controller: web server + camera engine
-python/bmcam/      camera client, discovery, manager, live view (stdlib only)
+python/lucam/      camera client, discovery, manager, live view (stdlib only)
 web/               control panel (index.html) and live view (live.html)
 tools/             mock_camera.py: simulated cameras for testing
 cameras.json       your camera list (created automatically, not in git)
@@ -41,9 +41,9 @@ Homebrew:
 - **MediaMTX:** installed with Homebrew if missing. It's only used by the live
   view.
 - **Launchers:**
-  - a `bmcam-remote` command, in Homebrew's `bin` (or `~/.local/bin` without
+  - a `lucam-remote` command, in Homebrew's `bin` (or `~/.local/bin` without
     Homebrew);
-  - **BM Cam Remote.command** in this folder: double-click it to start and open
+  - **LUCam iPhone Remote.command** in this folder: double-click it to start and open
     the panel, or drag it to the Dock.
 
 Options: `--yes` (don't ask), `--uninstall` (removes the launchers only). Re-run
@@ -74,10 +74,10 @@ MediaMTX on the PATH for the live view).
 ## 3. Run
 
 ```bash
-bmcam-remote --open
+lucam-remote --open
 ```
 
-Or double-click **BM Cam Remote.command**. The panel is at
+Or double-click **LUCam iPhone Remote.command**. The panel is at
 http://localhost:9980. Options: `--port 9980`, `--config path/to/cameras.json`.
 Quit with Ctrl-C or by closing the Terminal window. Quitting stops the live
 view and restores any camera that is in live mode.
@@ -98,7 +98,7 @@ camera in a grid, with tally, slate and timecode, plus REC and live start/stop
 per tile. These pages also work from an iPad on the same network.
 
 How it works: the controller uploads a custom streaming platform called
-"BM Cam Remote RTMP" to the phone, pointing at this Mac. It then starts the
+"LUCam iPhone Remote RTMP" to the phone, pointing at this Mac. It then starts the
 phone's live stream, which goes to [MediaMTX](https://mediamtx.org) running
 locally. MediaMTX passes it on to the browser over WebRTC without re-encoding,
 with roughly 0.2–0.5 s of latency.
@@ -184,6 +184,6 @@ Tested on an iPhone 15 Pro with app 3.5.3:
   setting it in the global row, selects the back lens with that focal length,
   so one value works across different iPhone models. For cameras without a
   lens list, Lens falls back to `/lens/zoom` and the per-model table
-  `NATIVE_LENSES_MM` in `python/bmcam/manager.py`.
+  `NATIVE_LENSES_MM` in `python/lucam/manager.py`.
 - **Unsupported controls.** Any endpoint the app doesn't implement greys out
   that control on the row instead of failing.
