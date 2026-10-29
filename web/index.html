@@ -1,0 +1,686 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BM Cam Remote</title>
+<style>
+:root {
+	--bg: #0d0e10;
+	--panel: #16181b;
+	--panel-2: #1d2024;
+	--line: #2a2e34;
+	--text: #e7e9ec;
+	--muted: #8b929c;
+	--accent: #f0a429;
+	--ok: #3fcf73;
+	--warn: #f0a429;
+	--rec: #e8322b;
+	--rec-dim: #5a1714;
+	--radius: 6px;
+	--cols: 34px minmax(190px, 1.6fr) 62px 66px 150px 86px 86px 86px 92px 112px 92px minmax(112px, .9fr) 92px 64px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); }
+body { font: 13px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif; -webkit-font-smoothing: antialiased; user-select: none; }
+button, input { font: inherit; color: inherit; }
+.mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
+
+header { display: flex; align-items: center; gap: 16px; padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+header h1 { font-size: 15px; font-weight: 650; margin: 0; letter-spacing: .02em; }
+header .sub { color: var(--muted); }
+header .spacer { flex: 1; }
+.conn { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.ok { background: var(--ok); }
+.dot.bad { background: var(--rec); }
+.dot.wait { background: var(--warn); }
+
+a.btn { text-decoration: none; color: var(--text); }
+.btn { border: 1px solid var(--line); background: var(--panel-2); border-radius: var(--radius); padding: 6px 12px; cursor: pointer; white-space: nowrap; }
+.btn:hover { border-color: #3c424a; background: #23272c; }
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: .4; cursor: default; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #111; font-weight: 600; }
+.btn.icon { padding: 4px 8px; }
+.btn.rec { min-width: 84px; font-weight: 700; letter-spacing: .06em; }
+.btn.rec .led { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--rec); margin-right: 7px; vertical-align: -1px; }
+.btn.rec.on { background: var(--rec); border-color: var(--rec); color: #fff; }
+.btn.rec.on .led { background: #fff; }
+.btn.rec.pending { animation: pulse .6s infinite alternate; }
+@keyframes pulse { from { opacity: 1; } to { opacity: .45; } }
+.btn.big { padding: 9px 18px; font-size: 14px; }
+.btn.stop { min-width: 84px; font-weight: 700; letter-spacing: .06em; }
+
+main { padding: 12px 16px 40px; }
+.table { min-width: 1240px; }
+.scroll { overflow-x: auto; }
+.row { display: grid; grid-template-columns: var(--cols); gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); margin-bottom: 6px; }
+.row.head { background: none; border: none; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; padding-top: 0; padding-bottom: 2px; margin-bottom: 2px; }
+.row.global { background: #1a1712; border-color: #4a3a1c; }
+.row.global .label { color: var(--accent); font-weight: 650; }
+.row.cam.offline { opacity: .55; }
+.row.cam.inactive .ctl { opacity: .75; }
+.row.cam.recording { border-color: var(--rec); box-shadow: inset 4px 0 0 var(--rec), 0 0 0 1px var(--rec-dim); }
+.camname { display: flex; flex-direction: column; min-width: 0; }
+.camname .top { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.camname input { background: none; border: 1px solid transparent; border-radius: 4px; padding: 1px 4px; margin-left: -5px; font-weight: 600; min-width: 0; width: 100%; }
+.camname input:hover { border-color: var(--line); }
+.camname input:focus { outline: none; border-color: var(--accent); background: var(--bg); }
+.camname .meta { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.camname .err { color: #ff8a80; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.arm { width: 22px; height: 22px; border-radius: 5px; border: 1px solid var(--line); background: var(--bg); cursor: pointer; display: grid; place-items: center; padding: 0; }
+.arm.on { background: var(--accent); border-color: var(--accent); }
+.arm.on::after { content: ""; width: 10px; height: 6px; border: solid #111; border-width: 0 0 2px 2px; transform: translateY(-1px) rotate(-45deg); }
+.arm.some { background: var(--accent); border-color: var(--accent); }
+.arm.some::after { content: ""; width: 10px; height: 2px; background: #111; }
+
+.combo { position: relative; display: flex; }
+.combo input { width: 100%; min-width: 0; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius) 0 0 var(--radius); padding: 5px 6px; text-align: right; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
+.combo input:focus { outline: none; border-color: var(--accent); }
+.combo.pending input { color: var(--warn); }
+.combo.disabled { opacity: .35; pointer-events: none; }
+.combo .drop { border: 1px solid var(--line); border-left: none; background: var(--panel-2); border-radius: 0 var(--radius) var(--radius) 0; width: 20px; padding: 0; cursor: pointer; color: var(--muted); font-size: 10px; }
+.combo .drop:hover { color: var(--text); }
+.combo.noopts input { border-radius: var(--radius); }
+.combo.noopts .drop { display: none; }
+.menu { position: fixed; z-index: 50; background: var(--panel-2); border: 1px solid #3a3f46; border-radius: var(--radius); box-shadow: 0 10px 30px rgba(0,0,0,.5); max-height: 320px; overflow-y: auto; min-width: 90px; padding: 4px; }
+.menu div { padding: 5px 10px; border-radius: 4px; cursor: pointer; text-align: right; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: nowrap; }
+.menu div:hover { background: #2c3137; }
+.menu div.cur { color: var(--accent); }
+.menu div.txt { text-align: left; font-family: inherit; }
+
+.tc { display: flex; flex-direction: column; font-size: 12px; min-width: 0; }
+.tc .clip { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.recall { display: flex; gap: 6px; }
+
+.panel { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); padding: 12px; margin-top: 14px; }
+.panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+.addbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.addbar input { background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 8px; }
+.addbar input:focus { outline: none; border-color: var(--accent); }
+.addbar .addr { width: 240px; }
+.addbar .nm { width: 160px; }
+.addbar .sep { width: 1px; height: 24px; background: var(--line); margin: 0 6px; }
+.found { margin-top: 10px; display: grid; gap: 6px; }
+.found .item { display: flex; align-items: center; gap: 12px; padding: 6px 8px; background: var(--panel-2); border-radius: var(--radius); }
+.found .item .grow { flex: 1; min-width: 0; }
+.found .item .meta { color: var(--muted); font-size: 11px; }
+.hint { color: var(--muted); font-size: 12px; }
+.empty { text-align: center; padding: 28px; color: var(--muted); border: 1px dashed var(--line); border-radius: var(--radius); }
+
+.toasts { position: fixed; right: 16px; bottom: 16px; display: grid; gap: 6px; z-index: 60; max-width: 420px; }
+.toast { background: #2a1513; border: 1px solid #6b2420; color: #ffd0cc; padding: 8px 12px; border-radius: var(--radius); font-size: 12px; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
+.toast.info { background: var(--panel-2); border-color: var(--line); color: var(--text); }
+
+.tools { display: flex; gap: 4px; }
+.fmt { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; text-align: left; border: 1px solid var(--line); background: var(--bg); border-radius: var(--radius); padding: 3px 7px; cursor: pointer; }
+.fmt:hover { border-color: #3c424a; }
+.fmt:disabled { opacity: .35; cursor: default; }
+.fmt .main { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.fmt .note { font-size: 10px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.fmt.live { border-color: #4a3a1c; }
+.fmt.live .note { color: var(--accent); }
+.fmtpanel { position: fixed; z-index: 50; background: var(--panel-2); border: 1px solid #3a3f46; border-radius: var(--radius); box-shadow: 0 10px 30px rgba(0,0,0,.5); padding: 12px; width: 280px; display: grid; gap: 10px; }
+.fmtpanel label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+.fmtpanel select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 5px 6px; text-transform: none; letter-spacing: 0; }
+.fmtpanel .hint { font-size: 11px; color: var(--muted); }
+.fmtpanel .hint.live { color: var(--accent); }
+.fmtpanel .buttons { display: flex; justify-content: flex-end; gap: 6px; }
+.btn.icon.spin { animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.menu .hdr { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; text-align: left; font-family: inherit; cursor: default; padding: 4px 10px 2px; }
+.menu .hdr:hover { background: none; }
+.menu .x { color: var(--muted); margin-left: 10px; }
+</style>
+</head>
+<body>
+<header>
+	<h1>BM Cam Remote</h1>
+	<span class="sub" id="summary">–</span>
+	<span class="conn"><span class="dot" id="connDot"></span><span id="connText">connecting…</span></span>
+	<span class="spacer"></span>
+	<a class="btn" href="/live" target="bmcam-multiview">Multiview</a>
+	<button class="btn rec big" id="recAll"><span class="led"></span>REC ALL</button>
+	<button class="btn stop big" id="stopAll">■ STOP ALL</button>
+</header>
+
+<main>
+	<div class="scroll">
+		<div class="table">
+			<div class="row head">
+				<div></div><div>Camera</div><div>Cam</div><div>Reel</div><div>Format</div><div>Lens mm</div><div>ISO</div><div>FPS</div><div>Shutter</div><div>WB K</div><div>Tint</div><div>Timecode / clip</div><div></div><div></div>
+			</div>
+			<div class="row global" id="globalRow"></div>
+			<div id="camRows"></div>
+			<div class="empty" id="emptyMsg" hidden>No cameras yet. Add one by IP below, or discover them on the network.</div>
+		</div>
+	</div>
+
+	<section class="panel">
+		<h2>Add cameras</h2>
+		<div class="addbar">
+			<input class="addr" id="addAddr" placeholder="iPhone IP, e.g. 192.168.1.42 (uses https :4444)" autocomplete="off" spellcheck="false">
+			<input class="nm" id="addName" placeholder="Name (optional)" autocomplete="off">
+			<button class="btn primary" id="addBtn">Add</button>
+			<span class="sep"></span>
+			<button class="btn" id="discBtn">Discover (Bonjour)</button>
+			<button class="btn" id="scanBtn">Scan subnet</button>
+			<span class="hint" id="discStatus"></span>
+		</div>
+		<div class="found" id="found"></div>
+	</section>
+</main>
+
+<div class="toasts" id="toasts"></div>
+
+<script>
+'use strict';
+const PARAMS = {
+	letter: { width: 'letter', text: true },
+	reel:   { step: 1 },
+	lens:   { step: 1, opts: 'lensOptions' },
+	iso:    { opts: 'isoOptions' },
+	fps:    { opts: 'fpsOptions' },
+	shutter:{ opts: 'shutterOptions' },
+	wb:     { step: 100, presets: [2700, 3200, 4000, 4300, 5000, 5600, 6500, 7500] },
+	tint:   { step: 1, presets: [-20, -10, 0, 10, 20] },
+};
+const GLOBAL_PARAMS = ['reel', 'lens', 'iso', 'fps', 'shutter', 'wb', 'tint'];
+const UNSUPPORTED_KEY = { letter: 'slate', reel: 'slate' };
+
+let state = { cameras: [], global: {}, discovery: { results: [] } };
+const pending = {};   // "camId:param" -> {value, until}
+const rows = new Map();
+let openMenu = null;
+
+// ---------------------------------------------------------------- api
+async function api(path, body) {
+	const opts = body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+	const res = await fetch('/api' + path, opts);
+	const data = await res.json().catch(() => ({}));
+	if (!res.ok) throw new Error(data.error || res.statusText);
+	return data;
+}
+function act(path, body) { return api(path, body || {}).catch(e => toast(e.message)); }
+
+// ---------------------------------------------------------------- helpers
+const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+function toast(msg, kind) {
+	const t = el('div', 'toast' + (kind ? ' ' + kind : ''), msg);
+	document.getElementById('toasts').appendChild(t);
+	setTimeout(() => t.remove(), 5000);
+}
+const fmt = v => v === null || v === undefined || v === '' ? '' : String(v);
+const same = (a, b) => String(a).replace(/[°\s]/g, '').toLowerCase() === String(b).replace(/[°\s]/g, '').toLowerCase();
+
+function closeMenu() { if (openMenu) { openMenu.remove(); openMenu = null; } }
+document.addEventListener('mousedown', e => { if (openMenu && !openMenu.contains(e.target) && !e.target.closest('[data-menu-anchor]')) closeMenu(); });
+window.addEventListener('scroll', closeMenu, true);
+
+function showMenu(anchor, items, current, onPick) {
+	closeMenu();
+	if (!items.length) return;
+	const m = el('div', 'menu');
+	for (const it of items) {
+		if (typeof it === 'object' && it.header) { m.appendChild(el('div', 'hdr', it.header)); continue; }
+		const d = el('div', typeof it === 'object' && it.text ? 'txt' : '', typeof it === 'object' ? it.label : fmt(it));
+		if (typeof it === 'object' && it.suffix) d.appendChild(el('span', 'x', it.suffix));
+		const val = typeof it === 'object' ? it.value : it;
+		if (current != null && (same(val, current) || (typeof it === 'object' && it.match != null && same(it.match, current)))) d.classList.add('cur');
+		d.addEventListener('mousedown', e => { e.preventDefault(); closeMenu(); onPick(val); });
+		m.appendChild(d);
+	}
+	document.body.appendChild(m);
+	const r = anchor.getBoundingClientRect();
+	m.style.minWidth = r.width + 'px';
+	const h = Math.min(m.scrollHeight, 320);
+	m.style.left = Math.min(r.left, innerWidth - m.offsetWidth - 8) + 'px';
+	m.style.top = (r.bottom + h + 8 > innerHeight ? Math.max(8, r.top - h - 4) : r.bottom + 4) + 'px';
+	const cur = m.querySelector('.cur');
+	if (cur) cur.scrollIntoView({ block: 'center' });
+	openMenu = m;
+}
+
+// A text field with an optional dropdown of camera-supported values.
+// Typing a value and pressing Enter (or picking from the menu) commits it.
+function combo(param, onCommit) {
+	const spec = PARAMS[param];
+	const wrap = el('div', 'combo ctl');
+	const input = el('input');
+	input.spellcheck = false;
+	input.autocomplete = 'off';
+	if (spec.text) { input.maxLength = 3; input.style.textAlign = 'center'; input.style.textTransform = 'uppercase'; }
+	const drop = el('button', 'drop', '▾');
+	drop.tabIndex = -1;
+	drop.dataset.menuAnchor = '';
+	wrap.append(input, drop);
+	wrap.options = [];
+	wrap.current = null;
+	const commit = v => { v = String(v).trim(); if (v === '') return; input.value = v; onCommit(v); input.blur(); };
+	input.addEventListener('keydown', e => {
+		if (e.key === 'Enter') { e.preventDefault(); commit(input.value); }
+		else if (e.key === 'Escape') { input.value = fmt(wrap.current); input.blur(); }
+		else if (spec.step && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+			e.preventDefault();
+			const base = parseFloat(input.value || wrap.current || 0) || 0;
+			input.value = base + (e.key === 'ArrowUp' ? 1 : -1) * spec.step * (e.shiftKey ? 10 : 1);
+		}
+	});
+	input.addEventListener('focus', () => { input.select(); });
+	input.addEventListener('blur', () => { setTimeout(() => { if (document.activeElement !== input) input.value = fmt(wrap.current); }, 150); });
+	drop.addEventListener('mousedown', e => {
+		e.preventDefault();
+		if (openMenu) { closeMenu(); return; }
+		showMenu(wrap, wrap.options, wrap.current, v => commit(v));
+	});
+	wrap.input = input;
+	wrap.set = (value, options, opts = {}) => {
+		wrap.current = value;
+		wrap.options = options || [];
+		wrap.classList.toggle('noopts', !wrap.options.length);
+		wrap.classList.toggle('disabled', !!opts.disabled);
+		wrap.classList.toggle('pending', !!opts.pending);
+		if (document.activeElement !== input) input.value = opts.disabled ? '–' : fmt(value);
+		input.title = opts.title || '';
+	};
+	return wrap;
+}
+
+function zoomFactor(mm, main) {
+	const f = mm / main;
+	if (f < 1) return f.toFixed(1) + '×';
+	const r = Math.round(f);
+	return (Math.abs(f - r) < 0.35 ? r : Math.round(f * 2) / 2) + '×';
+}
+
+function lensOptions(cams) {
+	const opts = cams.flatMap(c => c.lensOptions || []);
+	if (!opts.length) return [];
+	const main = cams.map(c => c.lensMain).find(Boolean);
+	if (cams.length === 1 && typeof opts[0] === 'object') {
+		// the phone's own lens list: pick a physical lens by id
+		return [{ header: 'Lenses' }, ...opts.map(o => o.facing === 'front'
+			? { value: o.value, label: 'Front', suffix: o.mm + ' mm', match: 'Front' }
+			: { value: o.value, label: o.mm + ' mm', suffix: o.zoom || (main ? zoomFactor(o.mm, main) : ''), match: o.mm })];
+	}
+	// several cameras (global row) or phones without a lens list: focal lengths in mm
+	const zoomOf = {};
+	for (const o of opts) if (typeof o === 'object' && o.facing !== 'front') zoomOf[o.mm] = o.zoom;
+	const mms = [...new Set(opts.map(o => typeof o === 'object' ? (o.facing === 'front' ? null : o.mm) : o).filter(v => v != null))].sort((a, b) => a - b);
+	const native = cams.every(c => c.lensNative);
+	return [{ header: native ? 'Lenses' : 'Focal lengths' },
+		...mms.map(mm => ({ value: mm, label: mm + ' mm', suffix: zoomOf[mm] || (main ? zoomFactor(mm, main) : '') }))];
+}
+
+function optionsFor(param, cam) {
+	if (param === 'lens') return lensOptions([cam]);
+	const spec = PARAMS[param];
+	if (spec.opts && cam[spec.opts] && cam[spec.opts].length) return cam[spec.opts];
+	return spec.presets || [];
+}
+
+// ---------------------------------------------------------------- global row
+const globalCtl = {};
+function buildGlobalRow() {
+	const row = document.getElementById('globalRow');
+	const armAll = el('button', 'arm');
+	armAll.title = 'Arm / disarm all cameras for global commands';
+	armAll.addEventListener('click', () => {
+		const allOn = state.cameras.length && state.cameras.every(c => c.active);
+		act('/global/active', { active: !allOn });
+	});
+	globalCtl.arm = armAll;
+	const lab = el('div', 'camname');
+	const top = el('div', 'top'); top.append(el('span', 'label', 'ALL ARMED'));
+	globalCtl.meta = el('div', 'meta', '');
+	lab.append(top, globalCtl.meta);
+	row.append(armAll, lab, el('div'));
+	for (const p of GLOBAL_PARAMS) {
+		if (p === 'lens') row.append(el('div'));   // no global format: per camera only
+		const c = combo(p, v => {
+			act('/global/set', { param: p, value: v });
+			for (const cam of state.cameras) if (cam.active) markPending(cam.id, p, v);
+		});
+		c.input.placeholder = '—';
+		globalCtl[p] = c;
+		row.append(c);
+	}
+	const extras = el('div', 'recall');
+	const awb = el('button', 'btn icon', 'AWB');
+	awb.title = 'Auto white balance on all armed cameras';
+	awb.addEventListener('click', () => act('/global/autowb'));
+	extras.append(awb);
+	row.append(extras);
+	const rec = el('button', 'btn rec'); rec.innerHTML = '<span class="led"></span>REC';
+	rec.title = 'Start / stop recording on all armed cameras';
+	rec.addEventListener('click', () => act('/global/record', { recording: !state.cameras.some(c => c.active && c.recording) }));
+	globalCtl.rec = rec;
+	row.append(rec, el('div'));
+}
+
+function unionOptions(param, cams) {
+	if (param === 'lens') return lensOptions(cams);
+	const seen = new Map();
+	for (const c of cams) for (const o of optionsFor(param, c)) if (!seen.has(String(o))) seen.set(String(o), o);
+	const vals = [...seen.values()];
+	if (vals.every(v => !isNaN(parseFloat(String(v).replace('1/', ''))))) {
+		vals.sort((a, b) => {
+			const n = x => String(x).startsWith('1/') ? 1 / parseFloat(String(x).slice(2)) : parseFloat(x);
+			return n(a) - n(b);
+		});
+	}
+	return vals;
+}
+
+function renderGlobal() {
+	const cams = state.cameras;
+	const armed = cams.filter(c => c.active);
+	const g = globalCtl;
+	g.arm.className = 'arm' + (armed.length && armed.length === cams.length ? ' on' : armed.length ? ' some' : '');
+	g.meta.textContent = armed.length + ' of ' + cams.length + ' armed';
+	for (const p of GLOBAL_PARAMS) {
+		const vals = armed.map(c => c[p]).filter(v => v !== null && v !== undefined);
+		const allSame = vals.length && vals.every(v => same(v, vals[0]));
+		g[p].set(allSame ? vals[0] : (vals.length ? '' : ''), unionOptions(p, armed), { title: allSame ? '' : 'Mixed values — type or pick one to override all armed cameras' });
+		g[p].input.placeholder = vals.length && !allSame ? 'mixed' : '—';
+	}
+	const armedRec = armed.some(c => c.recording);
+	g.rec.classList.toggle('on', armedRec);
+	g.rec.innerHTML = '<span class="led"></span>' + (armedRec ? 'STOP' : 'REC');
+	g.rec.disabled = !armed.length;
+}
+
+// ---------------------------------------------------------------- camera rows
+function markPending(id, param, value) { pending[id + ':' + param] = { value, since: Date.now(), until: Date.now() + 3500 }; }
+function pendingFor(cam, param) {
+	const k = cam.id + ':' + param, p = pending[k];
+	if (!p) return null;
+	const failed = cam.errorTime * 1000 >= p.since - 250;
+	if (failed || Date.now() > p.until || same(p.value, cam[param])) { delete pending[k]; return null; }
+	return p;
+}
+
+function buildRow(cam) {
+	const r = { el: el('div', 'row cam'), ctl: {} };
+	r.arm = el('button', 'arm');
+	r.arm.title = 'Armed: included in global settings and REC ALL';
+	r.arm.addEventListener('click', () => act('/cameras/' + cam.id + '/update', { active: !r.cam.active }));
+	const name = el('div', 'camname');
+	const top = el('div', 'top');
+	r.dot = el('span', 'dot');
+	r.name = el('input');
+	r.name.spellcheck = false;
+	r.name.addEventListener('keydown', e => { if (e.key === 'Enter') r.name.blur(); if (e.key === 'Escape') { r.name.value = r.cam.name; r.name.blur(); } });
+	r.name.addEventListener('change', () => act('/cameras/' + cam.id + '/update', { name: r.name.value }));
+	top.append(r.dot, r.name);
+	r.meta = el('div', 'meta');
+	r.err = el('div', 'err');
+	name.append(top, r.meta, r.err);
+	r.el.append(r.arm, name);
+	for (const p of ['letter', 'reel', 'lens', 'iso', 'fps', 'shutter', 'wb', 'tint']) {
+		const c = combo(p, v => {
+			if (p === 'letter') v = v.toUpperCase();
+			const lens = p === 'lens' && (r.cam.lensOptions || []).find(o => typeof o === 'object' && o.value === v);
+			markPending(cam.id, p, lens ? (lens.facing === 'front' ? 'Front' : lens.mm) : v);
+			act('/cameras/' + cam.id + '/set', { param: p, value: v });
+		});
+		r.ctl[p] = c;
+		r.el.append(c);
+		if (p === 'reel') {
+			r.fmt = el('button', 'fmt');
+			r.fmtMain = el('span', 'main');
+			r.fmtNote = el('span', 'note');
+			r.fmt.append(r.fmtMain, r.fmtNote);
+			r.fmt.dataset.menuAnchor = '';
+			r.fmt.addEventListener('mousedown', e => { e.preventDefault(); if (openMenu) { closeMenu(); return; } showFormatPanel(r.fmt, r.cam); });
+			r.el.append(r.fmt);
+		}
+	}
+	const tc = el('div', 'tc');
+	r.tc = el('span', 'mono');
+	r.clip = el('span', 'clip');
+	tc.append(r.tc, r.clip);
+	r.rec = el('button', 'btn rec');
+	r.rec.addEventListener('click', () => act('/cameras/' + cam.id + '/record', { recording: !r.cam.recording }));
+	r.refresh = el('button', 'btn icon', '↻');
+	r.refresh.title = 'Reconnect: drop the connection and re-read everything from the camera';
+	r.refresh.addEventListener('click', () => {
+		r.refresh.classList.add('spin');
+		setTimeout(() => r.refresh.classList.remove('spin'), 1500);
+		act('/cameras/' + cam.id + '/refresh');
+	});
+	const more = el('button', 'btn icon', '⋯');
+	more.dataset.menuAnchor = '';
+	more.addEventListener('mousedown', e => {
+		e.preventDefault();
+		if (openMenu) { closeMenu(); return; }
+		const items = [
+			{ label: 'Auto white balance', value: 'awb', text: true },
+			{ label: 'Open live view', value: 'live', text: true },
+			...(r.cam.liveOurs || r.cam.liveMode ? [{ label: 'Stop live view (restore format)', value: 'stoplive', text: true }] : []),
+			{ label: 'Reconnect', value: 'refresh', text: true },
+			{ label: 'Move up', value: 'up', text: true },
+			{ label: 'Move down', value: 'down', text: true },
+			{ label: 'Remove camera', value: 'remove', text: true },
+		];
+		showMenu(more, items, null, v => {
+			const base = '/cameras/' + cam.id;
+			if (v === 'awb') act(base + '/autowb');
+			if (v === 'live') {
+				// open the window synchronously so popup blockers allow it
+				window.open('/live/' + cam.id, 'bmcam-live-' + cam.id);
+				if (!r.cam.liveOurs) act(base + '/stream', { enabled: true });
+			}
+			if (v === 'stoplive') act(base + '/stream', { enabled: false });
+			if (v === 'refresh') act(base + '/refresh');
+			if (v === 'up') act(base + '/move', { delta: -1 });
+			if (v === 'down') act(base + '/move', { delta: 1 });
+			if (v === 'remove' && confirm('Remove ' + (r.cam.name || r.cam.address) + '?')) act(base + '/remove');
+		});
+	});
+	const tools = el('div', 'tools');
+	tools.append(r.refresh, more);
+	r.el.append(tc, r.rec, tools);
+	return r;
+}
+
+function codecName(cam, value) {
+	const o = (cam.codecOptions || []).find(o => o.value === value);
+	return o ? o.label : (value || '').replace('Apple ', '').replace(':Default', '');
+}
+function resolutionName(cam, value) {
+	const o = (cam.resolutionOptions || []).find(o => o.value === value);
+	return o ? o.label.split(' · ')[0] || value : value;
+}
+function formatLabel(cam) {
+	if (!cam.codec) return '';
+	return [codecName(cam, cam.codec), resolutionName(cam, cam.resolution), cam.colorspace].filter(Boolean).join(' · ');
+}
+
+// Recording format editor: resolution first (it decides which codecs exist).
+function showFormatPanel(anchor, cam) {
+	closeMenu();
+	const p = el('div', 'fmtpanel');
+	const mkSelect = (label, options, value) => {
+		const l = el('label', '', label);
+		const sel = el('select');
+		for (const o of options) {
+			const opt = el('option', '', o.label);
+			opt.value = o.value;
+			if (o.value === value) opt.selected = true;
+			sel.append(opt);
+		}
+		l.append(sel);
+		p.append(l);
+		return sel;
+	};
+	const resSel = mkSelect('Resolution', cam.resolutionOptions || [], cam.resolution);
+	const codecSel = mkSelect('Codec', cam.codecOptions || [], cam.codec);
+	resSel.addEventListener('change', () => {
+		// the camera's codec list depends on resolution; it is refreshed after applying
+		codecSel.disabled = resSel.value !== cam.resolution;
+	});
+	const csOptions = (cam.colorspaceOptions || []).map(v => ({ value: v, label: v }));
+	const csSel = csOptions.length ? mkSelect('Colour space', csOptions, cam.colorspace) : null;
+	if (!csSel) p.append(el('div', 'hint', 'Colour space: not reported by this camera.'));
+	if (cam.liveMode) p.append(el('div', 'hint live', 'In live view: changes are saved and applied when the live view stops or REC starts.'));
+	const buttons = el('div', 'buttons');
+	const cancel = el('button', 'btn', 'Cancel');
+	const apply = el('button', 'btn primary', 'Apply');
+	cancel.addEventListener('click', closeMenu);
+	apply.addEventListener('click', async () => {
+		// one request at a time so the camera worker queues them in this order
+		const base = '/cameras/' + cam.id + '/set';
+		const changes = [];
+		if (resSel.value !== cam.resolution) changes.push({ param: 'resolution', value: resSel.value });
+		if (!codecSel.disabled && codecSel.value !== cam.codec) changes.push({ param: 'codec', value: codecSel.value });
+		if (csSel && csSel.value !== cam.colorspace) changes.push({ param: 'colorspace', value: csSel.value });
+		closeMenu();
+		for (const c of changes) await act(base, c);
+	});
+	buttons.append(cancel, apply);
+	p.append(buttons);
+	document.body.appendChild(p);
+	const r = anchor.getBoundingClientRect();
+	p.style.left = Math.min(r.left, innerWidth - p.offsetWidth - 8) + 'px';
+	p.style.top = (r.bottom + p.offsetHeight + 8 > innerHeight ? Math.max(8, r.top - p.offsetHeight - 4) : r.bottom + 4) + 'px';
+	openMenu = p;
+}
+
+function renderRow(r, cam) {
+	r.cam = cam;
+	const cls = ['row', 'cam'];
+	if (!cam.online) cls.push('offline');
+	if (!cam.active) cls.push('inactive');
+	if (cam.recording) cls.push('recording');
+	r.el.className = cls.join(' ');
+	r.arm.className = 'arm' + (cam.active ? ' on' : '');
+	r.dot.className = 'dot ' + (cam.recording ? 'bad' : cam.online ? 'ok' : cam.connecting ? 'wait' : 'bad');
+	r.dot.title = cam.online ? 'online' : cam.connecting ? 'connecting' : 'offline';
+	if (document.activeElement !== r.name) r.name.value = cam.name || cam.deviceName || cam.address;
+	const meta = [cam.address, cam.product, cam.software && 'v' + cam.software].filter(Boolean).join(' · ');
+	r.meta.textContent = meta;
+	r.meta.title = meta;
+	const fresh = cam.error && (Date.now() / 1000 - cam.errorTime < 20);
+	r.err.textContent = cam.liveWarning || (fresh ? cam.error : '');
+	r.err.title = cam.liveWarning || cam.error || '';
+	const unsupported = new Set(cam.unsupported || []);
+	for (const [p, c] of Object.entries(r.ctl)) {
+		const pend = pendingFor(cam, p);
+		const key = UNSUPPORTED_KEY[p] || p;
+		const disabled = unsupported.has(key) || (!cam.online && cam[p] == null);
+		const title = unsupported.has(key) ? 'Not supported by this camera' : '';
+		c.set(pend ? pend.value : cam[p], optionsFor(p, cam), { pending: !!pend, disabled, title });
+	}
+	const fmtLabel = formatLabel(cam);
+	r.fmtMain.textContent = fmtLabel || (cam.online ? '…' : '–');
+	r.fmt.classList.toggle('live', !!cam.liveMode);
+	r.fmtNote.textContent = cam.liveMode ? 'live: ' + (cam.deviceFormat || 'H.264 HD') + ' · restored on REC' : '';
+	r.fmt.title = cam.liveMode
+		? 'Real recording format: ' + fmtLabel + '\nNow recording ' + (cam.deviceFormat || '') + ' for the live view. The real format comes back when the live view stops or REC starts.'
+		: 'Recording format: ' + fmtLabel;
+	r.fmt.disabled = !cam.online || !(cam.resolutionOptions || []).length;
+	r.tc.textContent = cam.timecode || (cam.online ? '' : 'offline');
+	r.clip.textContent = (cam.liveOurs ? '◉ LIVE · ' : '') + (cam.clipName ? 'next ' + cam.clipName : '');
+	r.rec.className = 'btn rec' + (cam.recording ? ' on' : '') + (cam.recordPending ? ' pending' : '');
+	r.rec.innerHTML = '<span class="led"></span>' + (cam.recording ? 'STOP' : 'REC');
+	r.rec.disabled = !cam.online;
+}
+
+function renderCams() {
+	const host = document.getElementById('camRows');
+	const ids = new Set(state.cameras.map(c => c.id));
+	for (const [id, r] of rows) if (!ids.has(id)) { r.el.remove(); rows.delete(id); }
+	state.cameras.forEach((cam, i) => {
+		let r = rows.get(cam.id);
+		if (!r) { r = buildRow(cam); rows.set(cam.id, r); }
+		if (host.children[i] !== r.el) host.insertBefore(r.el, host.children[i] || null);
+		renderRow(r, cam);
+	});
+	document.getElementById('emptyMsg').hidden = state.cameras.length > 0;
+}
+
+// ---------------------------------------------------------------- discovery
+let lastDiscovery = 0;
+function renderDiscovery() {
+	const d = state.discovery || {};
+	const status = document.getElementById('discStatus');
+	document.getElementById('discBtn').disabled = document.getElementById('scanBtn').disabled = !!d.running;
+	if (d.running) status.textContent = d.mode === 'scan' ? 'Scanning subnet…' : 'Browsing Bonjour…';
+	else if (d.error) status.textContent = 'Discovery failed: ' + d.error;
+	else if (d.finished) status.textContent = d.results.length ? d.results.length + ' camera(s) found' : 'No cameras found. Is the REST API enabled in the app, and are you on the same network?';
+	else status.textContent = '';
+	if (d.finished === lastDiscovery && !d.running) {
+		// keep "added" flags current without rebuilding
+		document.querySelectorAll('#found .item').forEach(item => {
+			const r = d.results.find(x => x.address === item.dataset.addr);
+			const b = item.querySelector('button');
+			if (r && b) { b.disabled = r.added; b.textContent = r.added ? 'Added' : 'Add'; }
+		});
+		return;
+	}
+	lastDiscovery = d.finished;
+	const box = document.getElementById('found');
+	box.textContent = '';
+	for (const r of d.results || []) {
+		const item = el('div', 'item');
+		item.dataset.addr = r.address;
+		const info = el('div', 'grow');
+		info.append(el('div', '', r.name), el('div', 'meta', [r.address, r.hostname, r.product, r.source].filter(Boolean).join(' · ')));
+		const b = el('button', 'btn', r.added ? 'Added' : 'Add');
+		b.disabled = r.added;
+		b.addEventListener('click', () => { b.disabled = true; act('/cameras/add', { address: r.address, name: r.name }); });
+		item.append(info, b);
+		box.appendChild(item);
+	}
+}
+
+// ---------------------------------------------------------------- header
+function renderHeader(ok) {
+	const cams = state.cameras;
+	const online = cams.filter(c => c.online).length;
+	const recording = cams.filter(c => c.recording).length;
+	document.getElementById('summary').textContent =
+		cams.length + ' camera' + (cams.length === 1 ? '' : 's') + ' · ' + online + ' online' + (recording ? ' · ' + recording + ' recording' : '');
+	document.getElementById('connDot').className = 'dot ' + (ok ? 'ok' : 'bad');
+	document.getElementById('connText').textContent = ok ? 'controller connected' : 'controller unreachable';
+	const recAll = document.getElementById('recAll');
+	recAll.classList.toggle('on', state.anyRecording);
+	recAll.disabled = !cams.some(c => c.active && c.online);
+}
+
+// ---------------------------------------------------------------- loop
+let failures = 0;
+async function poll() {
+	try {
+		state = await api('/state');
+		failures = 0;
+		renderHeader(true);
+		renderGlobal();
+		renderCams();
+		renderDiscovery();
+	} catch (e) {
+		if (++failures > 2) renderHeader(false);
+	}
+	setTimeout(poll, 350);
+}
+
+document.getElementById('recAll').addEventListener('click', () => act('/global/record', { recording: true }));
+document.getElementById('stopAll').addEventListener('click', () => act('/global/record', { recording: false }));
+document.getElementById('addBtn').addEventListener('click', addCam);
+document.getElementById('addAddr').addEventListener('keydown', e => { if (e.key === 'Enter') addCam(); });
+document.getElementById('discBtn').addEventListener('click', () => act('/discover', { mode: 'bonjour' }));
+document.getElementById('scanBtn').addEventListener('click', () => act('/discover', { mode: 'scan' }));
+function addCam() {
+	const a = document.getElementById('addAddr'), n = document.getElementById('addName');
+	if (!a.value.trim()) { a.focus(); return; }
+	api('/cameras/add', { address: a.value, name: n.value }).then(() => { a.value = ''; n.value = ''; }).catch(e => toast(e.message));
+}
+
+buildGlobalRow();
+poll();
+</script>
+</body>
+</html>

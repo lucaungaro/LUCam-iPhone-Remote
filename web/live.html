@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BM Cam Live</title>
+<style>
+:root {
+	--bg: #08090a;
+	--panel: #16181b;
+	--line: #2a2e34;
+	--text: #e7e9ec;
+	--muted: #8b929c;
+	--accent: #f0a429;
+	--ok: #3fcf73;
+	--rec: #e8322b;
+	--radius: 6px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); }
+body { font: 13px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif; display: flex; flex-direction: column; -webkit-font-smoothing: antialiased; }
+button { font: inherit; color: inherit; }
+.mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
+header { display: flex; align-items: center; gap: 14px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); flex: none; }
+header h1 { font-size: 15px; margin: 0; font-weight: 650; }
+header .sub { color: var(--muted); }
+header .spacer { flex: 1; }
+header a { color: var(--muted); text-decoration: none; }
+header a:hover { color: var(--text); }
+.btn { border: 1px solid var(--line); background: #1d2024; border-radius: var(--radius); padding: 5px 11px; cursor: pointer; white-space: nowrap; }
+.btn:hover { background: #23272c; border-color: #3c424a; }
+.btn:disabled { opacity: .4; cursor: default; }
+.btn.rec.on { background: var(--rec); border-color: var(--rec); color: #fff; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #111; font-weight: 600; }
+
+main { flex: 1; min-height: 0; padding: 12px; display: grid; gap: 12px; grid-template-columns: repeat(var(--n, 1), minmax(0, 1fr)); align-content: center; }
+.tile { position: relative; display: flex; flex-direction: column; border: 2px solid var(--line); border-radius: var(--radius); background: #000; overflow: hidden; min-height: 0; }
+.tile.recording { border-color: var(--rec); }
+.bar { display: flex; align-items: center; gap: 10px; padding: 6px 10px; background: rgba(22, 24, 27, .95); flex: none; }
+.bar .name { font-weight: 650; }
+.bar .meta { color: var(--muted); font-size: 12px; }
+.bar .spacer { flex: 1; }
+.tally { font-size: 11px; font-weight: 700; letter-spacing: .08em; padding: 2px 6px; border-radius: 3px; background: var(--rec); color: #fff; }
+.video { position: relative; aspect-ratio: 16 / 9; width: 100%; background: #000; }
+.single .video { flex: 1; aspect-ratio: auto; min-height: 0; }
+.video iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.overlay { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 24px; color: var(--muted); }
+.overlay .warn { color: #ffb4a8; max-width: 520px; }
+.overlay .actions { margin-top: 10px; }
+.empty { grid-column: 1 / -1; text-align: center; color: var(--muted); padding: 60px 20px; }
+main.single { grid-template-columns: 1fr; align-content: stretch; }
+main.single .tile { height: 100%; }
+</style>
+</head>
+<body>
+<header>
+	<h1 id="title">Live view</h1>
+	<span class="sub" id="sub"></span>
+	<span class="spacer"></span>
+	<button class="btn" id="startAll" hidden>Start all armed</button>
+	<a href="/live" id="multiLink">Multiview</a>
+	<a href="/">Control panel</a>
+</header>
+<main id="grid"></main>
+
+<script>
+'use strict';
+const parts = location.pathname.split('/').filter(Boolean);
+const singleId = parts[1] || null;            // /live/<id> -> one camera, /live -> multiview
+const tiles = new Map();
+let state = { cameras: [] };
+
+const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+async function api(path, body) {
+	const res = await fetch('/api' + path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+	return res.json();
+}
+const playerUrl = cam => location.protocol + '//' + location.hostname + ':8889/' + cam.livePath + '/?controls=false&muted=true&autoplay=true&playsinline=true';
+const mbps = b => b ? (b / 1e6).toFixed(1) + ' Mbit/s' : '';
+
+function buildTile(cam) {
+	const t = { el: el('div', 'tile') };
+	const bar = el('div', 'bar');
+	t.tally = el('span', 'tally', 'REC');
+	t.name = el('span', 'name');
+	t.meta = el('span', 'meta mono');
+	t.rate = el('span', 'meta mono');
+	t.rec = el('button', 'btn rec');
+	t.rec.addEventListener('click', () => api('/cameras/' + cam.id + '/record', { recording: !t.cam.recording }));
+	t.toggle = el('button', 'btn');
+	t.toggle.addEventListener('click', () => api('/cameras/' + cam.id + '/stream', { enabled: !t.cam.liveOurs }));
+	bar.append(t.tally, t.name, t.meta, el('span', 'spacer'), t.rate, t.rec, t.toggle);
+	if (!singleId) {
+		const open = el('button', 'btn', '⤢');
+		open.title = 'Open this camera alone';
+		open.addEventListener('click', () => { location.href = '/live/' + cam.id; });
+		bar.append(open);
+	}
+	t.video = el('div', 'video');
+	t.overlay = el('div', 'overlay');
+	t.video.append(t.overlay);
+	t.el.append(bar, t.video);
+	return t;
+}
+
+function renderTile(t, cam) {
+	t.cam = cam;
+	t.el.classList.toggle('recording', !!cam.recording);
+	t.tally.hidden = !cam.recording;
+	t.name.textContent = cam.name || cam.address;
+	t.meta.textContent = [cam.letter && cam.reel != null ? cam.letter + String(cam.reel).padStart(3, '0') : '', cam.timecode || ''].filter(Boolean).join('  ');
+	t.rate.textContent = cam.liveOurs ? mbps(cam.streamBitrate) : '';
+	t.rec.textContent = cam.recording ? '■ STOP' : '● REC';
+	t.rec.classList.toggle('on', !!cam.recording);
+	t.rec.disabled = !cam.online;
+	t.toggle.textContent = cam.liveOurs ? 'Stop live' : 'Start live';
+	t.toggle.disabled = !cam.online;
+
+	const wantPlayer = cam.liveOurs && cam.livePath;
+	if (wantPlayer && !t.iframe) {
+		t.iframe = el('iframe');
+		t.iframe.allow = 'autoplay; fullscreen';
+		t.iframe.src = playerUrl(cam);
+		t.video.prepend(t.iframe);
+	} else if (!wantPlayer && t.iframe) {
+		t.iframe.remove();
+		t.iframe = null;
+	}
+	let msg = '', warn = '';
+	if (!cam.online) msg = 'Camera offline';
+	else if (!cam.liveOurs) msg = 'Live view is off';
+	else if (cam.liveWarning) warn = cam.liveWarning;
+	else if (!cam.liveReady) msg = cam.streaming === 'Streaming' ? 'Waiting for video…' : 'Connecting to camera… (' + (cam.streaming || '…') + ')';
+	t.overlay.hidden = !msg && !warn;
+	t.overlay.textContent = '';
+	if (warn) t.overlay.append(el('div', 'warn', warn));
+	else if (msg) {
+		const box = el('div', '', msg);
+		if (!cam.liveOurs && cam.online) {
+			const actions = el('div', 'actions');
+			const b = el('button', 'btn primary', 'Start live view');
+			b.addEventListener('click', () => api('/cameras/' + cam.id + '/stream', { enabled: true }));
+			actions.append(b);
+			box.append(actions);
+		}
+		t.overlay.append(box);
+	}
+}
+
+function render() {
+	const grid = document.getElementById('grid');
+	let cams = state.cameras;
+	if (singleId) cams = cams.filter(c => c.id === singleId);
+	else cams = cams.filter(c => c.liveOurs || c.active);
+	grid.classList.toggle('single', !!singleId);
+	const n = singleId ? 1 : Math.max(1, Math.ceil(Math.sqrt(cams.length)));
+	grid.style.setProperty('--n', n);
+
+	const ids = new Set(cams.map(c => c.id));
+	for (const [id, t] of tiles) if (!ids.has(id)) { t.el.remove(); tiles.delete(id); }
+	cams.forEach((cam, i) => {
+		let t = tiles.get(cam.id);
+		if (!t) { t = buildTile(cam); tiles.set(cam.id, t); }
+		if (grid.children[i] !== t.el) grid.insertBefore(t.el, grid.children[i] || null);
+		renderTile(t, cam);
+	});
+	let empty = grid.querySelector('.empty');
+	if (!cams.length && !empty) grid.append(el('div', 'empty', singleId ? 'Unknown camera.' : 'No armed cameras. Arm cameras in the control panel, then start their live view.'));
+	if (cams.length && empty) empty.remove();
+
+	const live = state.cameras.filter(c => c.liveOurs).length;
+	document.getElementById('title').textContent = singleId ? (cams[0] ? (cams[0].name || cams[0].address) + ' — live' : 'Live view') : 'Multiview';
+	document.title = document.getElementById('title').textContent;
+	document.getElementById('sub').textContent = live + ' live';
+	document.getElementById('multiLink').hidden = !singleId;
+	const startAll = document.getElementById('startAll');
+	startAll.hidden = !!singleId || !state.cameras.some(c => c.active && c.online && !c.liveOurs);
+}
+
+document.getElementById('startAll').addEventListener('click', () => api('/global/stream', { enabled: true }));
+
+async function poll() {
+	try { state = await api('/state'); render(); } catch (e) { /* controller restarting */ }
+	setTimeout(poll, 700);
+}
+poll();
+</script>
+</body>
+</html>
