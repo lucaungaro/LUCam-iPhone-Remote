@@ -23,7 +23,7 @@ API = 'http://127.0.0.1:9997'
 PLATFORM_NAME = 'LUCam iPhone Remote'          # the phone lists it as "LUCam iPhone Remote RTMP"
 PLATFORM_ID = PLATFORM_NAME + ' RTMP'
 PLATFORM_FILE = 'LUCamiPhoneRemote.xml'
-LEGACY_PLATFORM_FILES = ('BMCamRemote.xml',)  # from before the rename; removed from phones
+LEGACY_PLATFORMS = ('BM Cam Remote RTMP',)  # from before the rename; removed from phones by name
 PROFILE = 'Preview'
 
 # The app only streams when a profile config matches the camera's current

@@ -11,6 +11,7 @@ import queue
 import re
 import threading
 import time
+import urllib.parse
 import uuid
 
 from . import api, discovery, livestream
@@ -255,10 +256,10 @@ class CameraWorker(threading.Thread):
 			raise api.ApiError(0, str(e))
 		rtmp_url = 'rtmp://{}:{}/live'.format(livestream.local_ip_toward(c.host), livestream.RTMP_PORT)
 		platforms = c.get('/livestreams/platforms') or []
-		if 'BM Cam Remote RTMP' in platforms:
-			for legacy in livestream.LEGACY_PLATFORM_FILES:
-				try:
-					c.request('DELETE', '/livestreams/customPlatforms/' + legacy)
+		for legacy in livestream.LEGACY_PLATFORMS:
+			if legacy in platforms:
+				try:  # the phone deletes custom platforms by name, not by file name
+					c.request('DELETE', '/livestreams/customPlatforms/' + urllib.parse.quote(legacy))
 				except api.ApiError:
 					pass
 		current = c.platform(livestream.PLATFORM_ID) if livestream.PLATFORM_ID in platforms else {}
@@ -466,15 +467,19 @@ class CameraWorker(threading.Thread):
 			raise ValueError('{} fps is not available at {}'.format(fmt.get('frameRate'), res_key(fmt['recordResolution'])))
 		return fmt
 
-	def _apply_format(self, fmt, timeout=8.0):
-		"""PUT a full format and wait until the phone reports it."""
+	def _apply_format(self, fmt, timeout=8.0, need_resolution=True):
+		"""PUT a full format and wait until the phone reports it. With
+		need_resolution=False, a resolution the phone kept is accepted: in
+		vertical mode it takes codec changes but ignores resolution ones."""
 		c = self.client
 		c.put('/system/format', bare_format(fmt))
-		want = (fmt.get('codec'), res_key(fmt.get('recordResolution')), fmt.get('frameRate'))
+		key = (lambda f: (f.get('codec'), res_key(f.get('recordResolution')), f.get('frameRate'))) if need_resolution \
+			else (lambda f: (f.get('codec'), f.get('frameRate')))
+		want = key(fmt)
 		deadline = time.monotonic() + timeout
 		while True:
 			now = c.format()
-			if (now.get('codec'), res_key(now.get('recordResolution')), now.get('frameRate')) == want:
+			if key(now) == want:
 				self._device_format = now
 				self._caps_dirty = True
 				dr = fmt.get('_dynamicRange')
@@ -483,6 +488,9 @@ class CameraWorker(threading.Thread):
 					self._device_dr = dr
 				return now
 			if time.monotonic() > deadline:
+				if key(now)[:1] == want[:1] and need_resolution:
+					raise api.ApiError(0, 'the camera kept {} (resolution changes are ignored in vertical mode)'.format(
+						res_key(now.get('recordResolution'))))
 				raise api.ApiError(0, 'format change not confirmed by the camera')
 			time.sleep(0.3)
 
@@ -548,7 +556,7 @@ class CameraWorker(threading.Thread):
 					c.stream(False)   # a stream running across a format change carries no video
 				except api.ApiError:
 					pass
-				self._apply_format(live)
+				self._apply_format(live, need_resolution=False)   # H.264 is what the stream needs
 		self._update(**self._format_state())
 
 	def exit_live(self):

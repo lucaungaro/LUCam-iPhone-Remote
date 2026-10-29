@@ -117,6 +117,10 @@ The controller starts MediaMTX itself and stops it on exit. It uses ports 1935
   even Proxy at 1080p) or HEVC, the phone connects but sends no video, and the
   app shows 0 MB/s. Resolution doesn't matter: H.264 streams fine in HD and 4K.
   The controller warns on the camera row when a stream sends no video.
+- **Vertical (portrait) recording works.** In vertical mode the phone accepts
+  the switch to H.264 but keeps its resolution (for example 1214×2160), so the
+  live stream is vertical. Format-panel resolution changes are also ignored by
+  the phone in vertical mode; the controller reports that as an error.
 - **A whole-number frame rate** (24, 25, 30, 48, 50 or 60). The app rejects
   stream profiles for 23.98, 29.97 and 59.94.
 - **Remote Camera off** was also set during testing. It wasn't the cause, but
