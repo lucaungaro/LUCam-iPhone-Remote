@@ -15,7 +15,7 @@ import time
 import urllib.parse
 import uuid
 
-from . import api, discovery, livestream
+from . import api, discovery, filelog, livestream
 
 PARAMS = ('lens', 'iso', 'fps', 'shutter', 'wb', 'tint', 'letter', 'reel', 'codec', 'resolution', 'colorspace',
 		  'focus', 'autofocus', 'focusonce', 'focuslock', 'displaylut', 'cleanfeed', 'iris')
@@ -1116,7 +1116,7 @@ class CameraWorker(threading.Thread):
 
 
 class CameraManager:
-	def __init__(self, config_path=None, web_dir=WEB_DIR, autosave=True):
+	def __init__(self, config_path=None, web_dir=WEB_DIR, autosave=True, log_dir=None, log_requests=True):
 		self.lock = threading.RLock()
 		self.config_path = config_path
 		self.web_dir = web_dir
@@ -1124,6 +1124,10 @@ class CameraManager:
 		self.workers = {}          # id -> CameraWorker, in insertion order
 		self.global_values = {}
 		self.log = []
+		# log_dir: folder for the run's log files (None: in-memory log only, as in the panel)
+		self.files = filelog.FileLog(log_dir, requests=log_requests) if log_dir else None
+		if self.files:
+			api.request_observer = self._observe_request
 		self.discovery = {'running': False, 'mode': None, 'results': [], 'error': None, 'finished': 0}
 		self._save_timer = None
 		self.live = livestream.LiveServer()
@@ -1183,9 +1187,26 @@ class CameraManager:
 		self._save_timer.start()
 
 	def _log(self, msg):
+		t = time.time()
 		with self.lock:
-			self.log.append({'t': time.time(), 'msg': msg})
+			self.log.append({'t': t, 'msg': msg})
 			del self.log[:-50]
+		if self.files:
+			self.files.event(msg, t)
+
+	def _observe_request(self, sent_at, host, port, method, path, status, took, error):
+		"""api.request_observer: every request any worker sends, written to the request log
+		under the camera's name (or its address while it has none)."""
+		name = host
+		with self.lock:
+			for w in self.workers.values():
+				try:
+					if api.parse_address(w.client.address)[1:] == (host, port):
+						name = w.state['name'] or host
+						break
+				except ValueError:
+					pass
+		self.files.request(sent_at, name, method, path, status, took, error)
 
 	# --- cameras ------------------------------------------------------------------
 
@@ -1452,6 +1473,10 @@ class CameraManager:
 		for w in workers:
 			w.stop()
 		self.live.stop()
+		if self.files:
+			api.request_observer = None
+			self.files.event('quit')
+			self.files.close()
 
 	# --- HTTP API -------------------------------------------------------------------
 

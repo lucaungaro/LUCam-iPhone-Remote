@@ -38,9 +38,15 @@ def main():
 	ap.add_argument('--config', default=os.path.join(ROOT, 'cameras.json'),
 					help='camera list file (default: cameras.json next to this script)')
 	ap.add_argument('--open', action='store_true', help='open the control panel in the browser')
+	ap.add_argument('--log-dir', default=os.path.join(ROOT, 'logs'),
+					help='folder for the log files of each run (default: logs/ next to this script)')
+	ap.add_argument('--no-log', action='store_true', help='keep the log in memory only, write no files')
+	ap.add_argument('--no-request-log', action='store_true',
+					help='write the events file but not the file listing every request sent to the cameras')
 	args = ap.parse_args()
 
-	manager = CameraManager(config_path=args.config)
+	manager = CameraManager(config_path=args.config, log_dir=None if args.no_log else args.log_dir,
+							log_requests=not args.no_request_log)
 	manager.http_port = args.port
 
 	class Handler(BaseHTTPRequestHandler):
@@ -73,6 +79,9 @@ def main():
 	server = Server(('0.0.0.0', args.port), Handler)
 	url = 'http://localhost:{}/'.format(args.port)
 	print('LUCam iPhone Remote on {}  (Ctrl-C to quit)'.format(url), flush=True)
+	if manager.files and manager.files.path:
+		print('Log: {}'.format(manager.files.path), flush=True)
+		manager._log('started on {}'.format(url))
 	if args.open:
 		threading.Timer(0.5, webbrowser.open, args=(url,)).start()
 	try:

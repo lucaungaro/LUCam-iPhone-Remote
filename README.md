@@ -78,9 +78,23 @@ lucam-remote --open
 ```
 
 Or double-click **LUCam iPhone Remote.command**. The panel is at
-http://localhost:9980. Options: `--port 9980`, `--config path/to/cameras.json`.
-Quit with Ctrl-C or by closing the Terminal window. Quitting stops the live
-view and restores any camera that is in live mode.
+http://localhost:9980. Options: `--port 9980`, `--config path/to/cameras.json`,
+`--log-dir path/to/logs`. Quit with Ctrl-C or by closing the Terminal window.
+Quitting stops the live view and restores any camera that is in live mode.
+
+### Log files
+
+Each run writes two files to `logs/` (next to `server.py`, or `--log-dir`):
+
+- `lucam-YYYYMMDD-HHMMSS.log`: what the panel's log shows (cameras found, values
+  changed or restored, errors), plus every value written to a camera and every
+  request that failed, with the time to the millisecond.
+- `lucam-YYYYMMDD-HHMMSS.requests.csv`: every request sent to every camera, with
+  the time it was sent, how long the camera took to answer and the status. Laid
+  over a clip's timecode this tells what the app asked a phone at any moment. At
+  16 cameras it grows by about 25 MB an hour; `--no-request-log` skips it.
+
+`--no-log` keeps the log in memory only, as before.
 
 ## 4. Using the UI
 

@@ -7,6 +7,7 @@ since version 3.4. Only the standard library is used.
 
 import json
 import ssl
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -16,6 +17,11 @@ API_ROOT = '/control/api/v1'
 _UNVERIFIED_SSL = ssl.create_default_context()
 _UNVERIFIED_SSL.check_hostname = False
 _UNVERIFIED_SSL.verify_mode = ssl.CERT_NONE
+
+# Called after every request as (sent_at, host, port, method, path, status, seconds, error).
+# status is 0 when the camera did not answer; error is '' on success. Set by the manager
+# to write the request log; must not raise.
+request_observer = None
 
 
 class ApiError(Exception):
@@ -87,9 +93,11 @@ class CameraClient:
 			headers['Content-Type'] = 'application/json'
 		req = urllib.request.Request(self.base_url + path, data=data, method=method, headers=headers)
 		ctx = _UNVERIFIED_SSL if self.scheme == 'https' else None
+		sent_at = time.time()
 		try:
 			with urllib.request.urlopen(req, timeout=timeout or self.timeout, context=ctx) as resp:
 				raw = resp.read()
+				status = resp.status
 				if headers_out is not None:
 					headers_out.update(resp.headers.items())
 		except urllib.error.HTTPError as e:
@@ -98,9 +106,13 @@ class CameraClient:
 				detail = e.read().decode('utf-8', 'replace')[:200]
 			except Exception:
 				pass
+			self._observe(sent_at, method, path, e.code, detail or str(e.reason))
 			raise ApiError(e.code, detail or e.reason)
 		except (urllib.error.URLError, OSError) as e:
-			raise ApiError(0, str(getattr(e, 'reason', e)))
+			err = str(getattr(e, 'reason', e))
+			self._observe(sent_at, method, path, 0, err)
+			raise ApiError(0, err)
+		self._observe(sent_at, method, path, status, '')
 		if binary:
 			return raw
 		if not raw:
@@ -109,6 +121,14 @@ class CameraClient:
 			return json.loads(raw.decode('utf-8'))
 		except ValueError:
 			return None
+
+	def _observe(self, sent_at, method, path, status, error):
+		if request_observer is None:
+			return
+		try:
+			request_observer(sent_at, self.host, self.port, method, path, status, time.time() - sent_at, error)
+		except Exception:
+			pass
 
 	def get(self, path, timeout=None):
 		return self.request('GET', path, timeout=timeout)
