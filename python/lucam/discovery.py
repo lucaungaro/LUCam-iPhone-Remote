@@ -17,7 +17,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from . import api
+from . import api, events
 
 MDNS_ADDR = ('224.0.0.251', 5353)
 
@@ -277,7 +277,7 @@ def discover_bonjour(timeout=2.5, probe_timeout=1.5, ips=None):
 		schemes = ('http', 'https') if inst['service'].startswith('_https') else ('https', 'http')
 		for scheme in schemes:
 			address = api.format_address(scheme, host, port)
-			info = api.probe(address, timeout=probe_timeout)
+			info = events.probe(address, timeout=probe_timeout)
 			if info is not None:
 				break
 		else:
@@ -328,7 +328,7 @@ def discover_subnet(ports=(api.APP_PORT, 80), connect_timeout=0.35, probe_timeou
 		host, port = target
 		for scheme in (('https', 'http') if port in (api.APP_PORT, 443) else ('http', 'https')):
 			address = api.format_address(scheme, host, port)
-			info = api.probe(address, timeout=probe_timeout)
+			info = events.probe(address, timeout=probe_timeout)
 			if info is not None:
 				break
 		else:

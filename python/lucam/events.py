@@ -1,23 +1,27 @@
-"""The camera's push channel: instead of asking for every value over and over,
-the controller opens one WebSocket to the camera, subscribes to the values it
-shows, and the camera sends a message whenever one of them changes.
+"""The camera's event channel: a WebSocket that pushes every change of state.
 
-Blackmagic's "Event Control API":
-  GET /control/api/v1/event/list               the properties that can be subscribed to
-  WebSocket /control/api/v1/event/websocket    (wss:// on the iPhone app's port 4444)
+    wss://<phone>:4444/control/api/v1/event/websocket
 
-  -> {"type": "request", "data": {"action": "subscribe", "properties": ["/video/iso", ...]}}
-  <- {"type": "response", "data": {"action": "subscribe", "success": true,
-                                   "values": {"/video/iso": {"iso": 400}, ...}}}
-  <- {"type": "event", "data": {"action": "propertyValueChanged",
-                                "property": "/video/iso", "value": {"iso": 800}}}
+Why it matters. Blackmagic Camera for iOS 3.5 slows down, over hours, when its
+REST API is used while no client is connected to this WebSocket: each request is
+then followed by a pass over the app's whole state, its answers take longer and
+longer, and recordings end up dropping frames. Only relaunching the app clears
+it. With a client connected from the start, none of this was seen. So the
+controller opens this channel before it sends a camera anything, keeps it open,
+and takes the camera's state from it instead of polling.
 
-A value is the same object a GET of that path returns. Writes still go through
-PUT/POST. Standard library only: a minimal RFC 6455 client (text frames, ping,
-close; no extensions).
+Protocol (from the API reference the phone serves, notification.yaml 1.2.0):
+
+    -> {"type": "request", "id": 1, "data": {"action": "subscribe", "properties": ["/video/iso", ...]}}
+    <- {"type": "response", "id": 1, "data": {"action": "subscribe", "properties": [...], "values": {...}, "success": true}}
+    <- {"type": "event", "data": {"action": "propertyValueChanged", "property": "/video/iso", "value": {"iso": 400}}}
+
+An event's value is the object a GET of the same path returns. Only the
+standard library is used.
 """
 
 import base64
+import hashlib
 import json
 import os
 import socket
@@ -28,171 +32,373 @@ import time
 
 from . import api
 
-PATH = api.API_ROOT + '/event/websocket'
-PING_EVERY = 10.0   # seconds; the camera counts as gone if nothing comes back for 2x this
+WS_PATH = api.API_ROOT + '/event/websocket'
+_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
+
+# What the controller shows or acts on. The channel subscribes to these the
+# moment it opens; the worker then adds everything else the camera lists under
+# /event/list, which is the subscription the long tests ran with.
+PROPERTIES = (
+	'/transports/0/record', '/transports/0/timecode',
+	'/video/iso', '/video/supportedISOs', '/video/shutter', '/video/supportedShutters',
+	'/video/whiteBalance', '/video/whiteBalance/description',
+	'/video/whiteBalanceTint', '/video/whiteBalanceTint/description',
+	'/system/product', '/system/format', '/system/supportedFormats',
+	'/system/dynamicRange', '/system/supportedDynamicRanges',
+	'/lens/iris', '/lens/iris/description', '/lens/focus', '/lens/focus/description',
+	'/lens/zoom', '/lens/zoom/description', '/lens/cameras', '/lens/cameras/active',
+	'/slates/nextClip', '/livestreams/0', '/livestreams/0/activePlatform',
+	'/monitoring/LCD/displayLUT', '/monitoring/HDMI/displayLUT',
+	'/monitoring/LCD/cleanFeed', '/monitoring/HDMI/cleanFeed',
+)
 
 
-class HandshakeError(Exception):
-	"""The camera answered, but not with a WebSocket (e.g. no event API: 404)."""
+class Refused(Exception):
+	"""An HTTP server answered but would not open the event channel."""
 
 
-class EventStream(threading.Thread):
-	"""One WebSocket to one camera. Calls on_values({path: value}) for the current
-	values once subscribed and for every change after, and on_closed(reason) once
-	when the connection ends (camera gone, app in the background, stop())."""
+def _recv_exact(sock, n):
+	buf = b''
+	while len(buf) < n:
+		chunk = sock.recv(n - len(buf))
+		if not chunk:
+			raise OSError('connection closed')
+		buf += chunk
+	return buf
 
-	def __init__(self, client, properties, on_values, on_closed, timeout=4.0):
-		super().__init__(name='lucam-events-' + client.host, daemon=True)
-		self.client = client
-		self.properties = list(properties)
-		self.on_values = on_values
-		self.on_closed = on_closed
-		self.timeout = timeout
-		self.subscribed = threading.Event()
+
+def connect(scheme, host, port, timeout=3.0):
+	"""Open the WebSocket; returns the connected socket. Raises OSError when
+	nothing answers, Refused when a server answers without upgrading."""
+	raw = socket.create_connection((host, port), timeout=timeout)
+	try:
+		raw.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+		sock = api._UNVERIFIED_SSL.wrap_socket(raw, server_hostname=host) if scheme == 'https' else raw
+	except Exception:
+		raw.close()
+		raise
+	try:
+		key = base64.b64encode(os.urandom(16)).decode()
+		h = '[{}]'.format(host) if ':' in host else host
+		sock.sendall(('GET {} HTTP/1.1\r\nHost: {}:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
+					  'Sec-WebSocket-Key: {}\r\nSec-WebSocket-Version: 13\r\n\r\n').format(WS_PATH, h, port, key).encode())
+		head = b''
+		while b'\r\n\r\n' not in head:
+			chunk = sock.recv(4096)
+			if not chunk:
+				raise OSError('closed during the handshake')
+			head += chunk
+			if len(head) > 65536:
+				raise Refused('oversized answer to the handshake')
+		lines = head.split(b'\r\n\r\n', 1)[0].decode('latin-1').split('\r\n')
+		status = lines[0].split(' ')
+		if len(status) < 2 or status[1] != '101':
+			raise Refused(lines[0][:80])
+		headers = {k.strip().lower(): v.strip() for k, _, v in (l.partition(':') for l in lines[1:])}
+		want = base64.b64encode(hashlib.sha1((key + _GUID).encode()).digest()).decode()
+		if headers.get('sec-websocket-accept', want) != want:
+			raise Refused('bad Sec-WebSocket-Accept')
+		rest = head.split(b'\r\n\r\n', 1)[1]
+		return sock, rest
+	except Exception:
+		try:
+			sock.close()
+		except OSError:
+			pass
+		raise
+
+
+def _frame(opcode, payload=b''):
+	"""One masked client frame."""
+	mask = os.urandom(4)
+	n = len(payload)
+	head = bytearray([0x80 | opcode])
+	if n < 126:
+		head.append(0x80 | n)
+	elif n < 65536:
+		head.append(0x80 | 126)
+		head += struct.pack('>H', n)
+	else:
+		head.append(0x80 | 127)
+		head += struct.pack('>Q', n)
+	return bytes(head) + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+
+
+class EventChannel(threading.Thread):
+	"""Keeps one WebSocket to a camera open, for as long as the worker lives.
+
+	candidates: addresses to try in turn until one opens (a bare IP typed by
+	the user becomes https://ip:4444, http://ip, https://ip).
+
+	Callbacks, all called on this thread:
+	  on_open(address)        the channel is open and subscribed
+	  on_close(reason)        it was open and is not any more
+	  on_refused(address)     a server answered there without an event channel
+	  on_event(property, value)
+
+	Reconnects by itself: at once after a drop, then every RETRY seconds (RETRY_REFUSED
+	on a server that answers without opening the channel).
+	"""
+
+	RETRY = 1.0            # between attempts while the camera does not answer
+	RETRY_REFUSED = 5.0    # between attempts on a server that does not open the event channel
+
+	def __init__(self, candidates, on_event, on_open, on_close, on_refused, on_unreachable=None, name='lucam-events'):
+		super().__init__(name=name, daemon=True)
+		self.candidates = list(candidates)
+		self.on_event, self.on_open, self.on_close, self.on_refused = on_event, on_open, on_close, on_refused
+		self.on_unreachable = on_unreachable   # nothing answered at any candidate (called at every attempt)
 		self._halt = threading.Event()
-		self._sock = None
+		self._wake = threading.Event()
 		self._send_lock = threading.Lock()
-		self.messages = 0
+		self._sock = None
+		self._next_id = 1
+		self.connected = False
+		self.address = None      # the candidate that opened
+		self.last_rx = 0.0       # monotonic time of the last frame received (any kind)
+		self.pongs = 0           # pongs received on this connection: tells whether the camera answers pings
+		self.messages = 0        # events received since the worker started
+		self.extra = []          # properties to subscribe to on top of PROPERTIES (kept across reconnects)
+
+	# --- called from other threads ------------------------------------------
 
 	def stop(self):
 		self._halt.set()
+		self._wake.set()
+		self._drop()
+
+	def reset(self):
+		"""Drop the connection (it will be reopened at once)."""
+		self._drop()
+
+	def retry_now(self):
+		self._wake.set()
+
+	def ping(self):
+		return self._send(_frame(0x9, b'lucam'))
+
+	def subscribe(self, properties):
+		"""Add properties to the subscription, now and after every reconnect."""
+		new = [p for p in properties if p not in PROPERTIES and p not in self.extra]
+		self.extra.extend(new)
+		if new and self.connected:
+			self._request('subscribe', new)
+
+	# --- internals -----------------------------------------------------------
+
+	def _drop(self):
+		sock = self._sock
+		if sock is not None:
+			try:
+				sock.shutdown(socket.SHUT_RDWR)
+			except OSError:
+				pass
+			try:
+				sock.close()
+			except OSError:
+				pass
+
+	def _send(self, data):
+		sock = self._sock
+		if sock is None:
+			return False
 		try:
-			self._send_frame(0x8, b'')
-		except Exception:
-			pass
-		self._close_socket()
+			with self._send_lock:
+				sock.sendall(data)
+			return True
+		except OSError:
+			return False
 
-	# --- connection -------------------------------------------------------------
-
-	def _connect(self):
-		c = self.client
-		raw = socket.create_connection((c.host, c.port), timeout=self.timeout)
-		if c.scheme == 'https':
-			raw = api._UNVERIFIED_SSL.wrap_socket(raw, server_hostname=c.host)
-		key = base64.b64encode(os.urandom(16)).decode()
-		host = '[{}]'.format(c.host) if ':' in c.host else c.host
-		raw.sendall(('GET {} HTTP/1.1\r\nHost: {}:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
-					 'Sec-WebSocket-Key: {}\r\nSec-WebSocket-Version: 13\r\n\r\n').format(PATH, host, c.port, key).encode())
-		head = b''
-		while b'\r\n\r\n' not in head:
-			chunk = raw.recv(4096)
-			if not chunk:
-				raise HandshakeError('connection closed during the handshake')
-			head += chunk
-			if len(head) > 65536:
-				raise HandshakeError('handshake answer too long')
-		head, _, rest = head.partition(b'\r\n\r\n')
-		status = head.split(b'\r\n', 1)[0].decode('latin-1')
-		if ' 101 ' not in status + ' ':
-			raise HandshakeError(status)
-		self._sock = raw
-		self._buf = rest
-
-	def _close_socket(self):
-		s, self._sock = self._sock, None
-		if s:
-			try:
-				s.shutdown(socket.SHUT_RDWR)   # wakes a recv() waiting in run()
-			except OSError:
-				pass
-			try:
-				s.close()
-			except OSError:
-				pass
-
-	# --- frames -------------------------------------------------------------------
-
-	def _send_frame(self, opcode, payload):
-		if not self._sock:
-			return
-		head = bytes([0x80 | opcode])
-		n = len(payload)
-		if n < 126:
-			head += bytes([0x80 | n])
-		elif n < 65536:
-			head += bytes([0x80 | 126]) + struct.pack('!H', n)
-		else:
-			head += bytes([0x80 | 127]) + struct.pack('!Q', n)
-		mask = os.urandom(4)
-		masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
-		with self._send_lock:
-			self._sock.sendall(head + mask + masked)
-
-	def send_json(self, obj):
-		self._send_frame(0x1, json.dumps(obj).encode('utf-8'))
-
-	def _read(self, n):
-		while len(self._buf) < n:
-			chunk = self._sock.recv(65536)
-			if not chunk:
-				raise ConnectionError('closed by the camera')
-			self._buf += chunk
-		data, self._buf = self._buf[:n], self._buf[n:]
-		return data
-
-	def _read_frame(self):
-		b1, b2 = self._read(2)
-		opcode, n = b1 & 0x0F, b2 & 0x7F
-		if n == 126:
-			n = struct.unpack('!H', self._read(2))[0]
-		elif n == 127:
-			n = struct.unpack('!Q', self._read(8))[0]
-		mask = self._read(4) if b2 & 0x80 else None
-		payload = self._read(n)
-		if mask:
-			payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
-		return bool(b1 & 0x80), opcode, payload
-
-	# --- main loop ------------------------------------------------------------------
+	def _request(self, action, properties):
+		msg = {'type': 'request', 'id': self._next_id, 'data': {'action': action, 'properties': list(properties)}}
+		self._next_id += 1
+		return self._send(_frame(0x1, json.dumps(msg).encode()))
 
 	def run(self):
-		reason = 'stopped'
-		try:
-			self._connect()
-			self._sock.settimeout(PING_EVERY)
-			self.send_json({'type': 'request', 'data': {'action': 'subscribe', 'properties': self.properties}})
-			last_heard = time.monotonic()
-			message = b''
-			while not self._halt.is_set():
+		short = 0   # connections in a row that closed within 2 s of opening
+		while not self._halt.is_set():
+			refused = None
+			opened = False
+			for address in ([self.address] if self.address else self.candidates):
+				if self._halt.is_set():
+					return
+				scheme, host, port = api.parse_address(address)
 				try:
-					fin, opcode, payload = self._read_frame()
-				except socket.timeout:
-					if time.monotonic() - last_heard > 2 * PING_EVERY:
-						reason = 'no answer for {:.0f} s'.format(2 * PING_EVERY)
-						break
-					self._send_frame(0x9, b'lucam')   # ping: the camera must pong
+					sock, rest = connect(scheme, host, port)
+				except Refused:
+					refused = refused or address
 					continue
-				last_heard = time.monotonic()
-				if opcode == 0x8:
+				except (OSError, ValueError):
+					continue
+				opened = True
+				since = time.monotonic()
+				self._serve(sock, rest, address)
+				break
+			if self._halt.is_set():
+				return
+			if opened:
+				# It was open and dropped: try again at once. Unless it keeps closing as
+				# soon as it opens, which must not turn into a storm of reconnections.
+				short = short + 1 if time.monotonic() - since < 2.0 else 0
+				if short >= 2:
+					self._wake.wait(self.RETRY)
+					self._wake.clear()
+				continue
+			try:
+				if refused:
+					self.on_refused(refused)
+				elif self.on_unreachable:
+					self.on_unreachable()
+			except Exception:
+				pass
+			self._wake.wait(self.RETRY_REFUSED if refused else self.RETRY)
+			self._wake.clear()
+
+	def _serve(self, sock, rest, address):
+		self._sock = sock
+		self.address = address
+		self.pongs = 0
+		self.last_rx = time.monotonic()
+		reason = 'closed'
+		try:
+			sock.settimeout(None)
+			if not self._request('subscribe', list(PROPERTIES) + self.extra):
+				raise OSError('could not subscribe')
+			self.connected = True
+			self.on_open(address)
+			buf = bytearray(rest)
+			message = bytearray()   # a fragmented text message being assembled
+			while not self._halt.is_set():
+				frame = self._read_frame(sock, buf)
+				self.last_rx = time.monotonic()
+				fin, opcode, payload = frame
+				if opcode == 0x9:
+					self._send(_frame(0xA, payload))
+				elif opcode == 0xA:
+					self.pongs += 1
+				elif opcode == 0x8:
+					self._send(_frame(0x8, payload[:2]))
 					reason = 'closed by the camera'
 					break
-				if opcode == 0x9:
-					self._send_frame(0xA, payload)
-					continue
-				if opcode in (0x1, 0x2, 0x0):
+				elif opcode in (0x0, 0x1, 0x2):
 					message += payload
 					if fin:
-						self._handle(message)
-						message = b''
-		except HandshakeError as e:
-			reason = 'no event socket ({})'.format(e)
-		except Exception as e:   # refused, reset, TLS, timeout while connecting
-			if not self._halt.is_set():
-				reason = str(e) or type(e).__name__
+						self._dispatch(bytes(message))
+						message = bytearray()
+		except OSError as e:
+			reason = str(e) or 'connection lost'
 		finally:
-			self._close_socket()
-			self.on_closed(reason)
+			was = self.connected
+			self.connected = False
+			self._sock = None
+			try:
+				sock.close()
+			except OSError:
+				pass
+			if was and not self._halt.is_set():
+				try:
+					self.on_close(reason)
+				except Exception:
+					pass
 
-	def _handle(self, raw):
+	@staticmethod
+	def _read_frame(sock, buf):
+		def need(n):
+			while len(buf) < n:
+				chunk = sock.recv(65536)
+				if not chunk:
+					raise OSError('connection closed')
+				buf.extend(chunk)
+		need(2)
+		fin, opcode, masked, n = bool(buf[0] & 0x80), buf[0] & 0x0F, bool(buf[1] & 0x80), buf[1] & 0x7F
+		off = 2
+		if n == 126:
+			need(4)
+			n = struct.unpack('>H', buf[2:4])[0]
+			off = 4
+		elif n == 127:
+			need(10)
+			n = struct.unpack('>Q', buf[2:10])[0]
+			off = 10
+		if n > 16 * 1024 * 1024:
+			raise OSError('oversized frame')
+		mask = None
+		if masked:
+			need(off + 4)
+			mask = bytes(buf[off:off + 4])
+			off += 4
+		need(off + n)
+		payload = bytes(buf[off:off + n])
+		del buf[:off + n]
+		if mask:
+			payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+		return fin, opcode, payload
+
+	# Not named _handle: threading.Thread has an attribute of that name from Python 3.13 on,
+	# which would replace the method and make every message fail.
+	def _dispatch(self, raw):
 		try:
 			msg = json.loads(raw.decode('utf-8'))
-		except ValueError:
+		except (ValueError, UnicodeDecodeError):
+			return
+		if not isinstance(msg, dict):
+			return
+		data = msg.get('data')
+		if not isinstance(data, dict):
+			return
+		if msg.get('type') == 'event' and data.get('action') == 'propertyValueChanged':
+			self._deliver(data.get('property'), data.get('value'))
+		elif msg.get('type') == 'response' and isinstance(data.get('values'), dict):
+			# the answer to a subscription carries the current values
+			for prop, value in data['values'].items():
+				self._deliver(prop, value)
+
+	def _deliver(self, prop, value):
+		if not isinstance(prop, str):
 			return
 		self.messages += 1
-		data = msg.get('data') or {}
-		if msg.get('type') == 'response' and data.get('action') == 'subscribe':
-			if data.get('success', True):
-				self.subscribed.set()
-				self.on_values(dict(data.get('values') or {}))   # even none: the subscription is up
-		elif msg.get('type') == 'event' and data.get('action') == 'propertyValueChanged' and data.get('property'):
-			self.on_values({data['property']: data.get('value')})
+		try:
+			self.on_event(prop, value)
+		except Exception:
+			pass   # a bad event must not close the channel
+
+
+class listening:
+	"""Hold a camera's event channel open while a script sends it requests:
+
+	    with events.listening('192.168.1.20') as is_open:
+	        ...requests...
+
+	`is_open` is False when the channel could not be opened within `wait` seconds
+	(the camera has none, or does not answer). With `exact`, only the address as
+	given is tried, not its https/http variants."""
+
+	def __init__(self, address, wait=3.0, exact=False):
+		self.wait = wait
+		self._opened = threading.Event()
+		self._settled = threading.Event()   # open, refused or unreachable: no need to wait longer
+		self._channel = EventChannel([address] if exact else api.address_candidates(address),
+									 on_event=lambda prop, value: None, on_open=lambda a: self._settle(True),
+									 on_close=lambda reason: None, on_refused=lambda a: self._settle(False),
+									 on_unreachable=lambda: self._settle(False), name='lucam-events-tool')
+
+	def _settle(self, opened):
+		if opened:
+			self._opened.set()
+		self._settled.set()
+
+	def __enter__(self):
+		self._channel.start()
+		self._settled.wait(self.wait)
+		return self._opened.is_set()
+
+	def __exit__(self, *exc):
+		self._channel.stop()
+		return False
+
+
+def probe(address, timeout=1.0):
+	"""api.probe with the camera's event channel held open around it, so that even
+	the request that finds a camera reaches an app that is being listened to."""
+	with listening(address, wait=timeout, exact=True):
+		return api.probe(address, timeout=timeout)

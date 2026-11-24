@@ -9,15 +9,19 @@ web page, through the app's REST API (`/control/api/v1`).
 - **Global row**: one value is pushed to every *armed* camera and overrides its own value
 - REC / STOP per camera, plus REC ALL / STOP ALL (fired in parallel so all cameras start together)
 - Live state: tally, timecode, next clip name, errors
+- Listens to each phone instead of polling it, times its answers, and raises the
+  alarm when a phone slows down, stops recording by itself or goes away
+  (see [How it talks to the phones](#how-it-talks-to-the-phones))
 - Live view and Multiview of the camera feeds in the browser
 - Works from any browser on the network, including iPads: `http://<this Mac's IP>:9980`
 
 ```
 install.sh         installer for macOS (see below)
 server.py          the controller: web server + camera engine
-python/lucam/      camera client, discovery, manager, live view (stdlib only)
+python/lucam/      camera client, event channel, discovery, manager, live view (stdlib only)
 web/               control panel (index.html) and live view (live.html)
-tools/             mock_camera.py: simulated cameras for testing
+tools/             mock_camera.py: simulated cameras for testing; dump_settings.py
+tests/             test_engine.py: the controller checked against simulated cameras
 cameras.json       your camera list (created automatically, not in git)
 ```
 
@@ -95,11 +99,11 @@ with `lucam-remote --log` to write two files per run to `logs/` (next to
   when it stops and one when it answers again, not one per attempt.
 - `lucam-YYYYMMDD-HHMMSS.requests.csv`: every request sent to every camera: when
   it was sent, the camera, the path, what a write carried, the status and how
-  long the camera took to answer.
+  long the camera took to answer. It shows what the controller asked a phone at
+  any moment, and how each phone's answer time moved through the day.
 
-The controller sends each camera about 11 requests a second (20 while its focus
-is locked), so the requests file grows by about 2.5 MB an hour per camera: some
-40 MB an hour, or 400 MB over a 10-hour day, with 16 cameras.
+Cameras are listened to, not polled, so the requests file stays small: a line
+per command, plus one timing read per armed camera every 30 seconds.
 `--no-request-log` writes only the events file. Log files older than 30 days are
 deleted when the controller starts (`--log-keep-days 7` to change it, `0` to keep
 everything).
@@ -112,9 +116,56 @@ example the REC press, logged as `POST /transports/0/record -> 204` in the
 events file, against the clip's first frame. Keep the Mac's clock synced
 too (System Settings > General > Date & Time > Set time automatically).
 
+### Alarms
+
+The camera's API reports no dropped frames, no load and no temperature, so the
+controller raises the alarms itself. Each one shows as a blinking red line in the
+camera's row, writes an `ALERT` line in the log (and in the events file, with
+`--log`) and, on a Mac, shows a system notification, so it is seen even when the
+panel is in the background (`--no-notifications` turns that off). No sound is
+played.
+
+- **Stopped by the camera.** A camera that was recording reports that it is not,
+  and LUCam did not send the STOP: the camera, or someone at the phone, ended the
+  clip. The line gives the time, the timecode and how long the clip had run, and
+  stays until the next REC. With the Blackmagic Camera app's dropped-frames option
+  set to stop recording, this is a live dropped-frame alarm for every camera on the
+  panel: the clip is lost from that moment, but you know at once, which camera,
+  and at which timecode.
+- **Lost while recording.** A recording camera has been unreachable for 10
+  seconds: the app crashed, was closed, or the phone was locked.
+- **Not carried out.** The camera acknowledged a REC or a STOP and its state did
+  not change within 3 seconds.
+- **Polled, not listened to.** A phone that has an event channel has been polled
+  for 10 seconds because the channel cannot be opened. This is the situation
+  that slows the app (see [How it talks to the phones](#how-it-talks-to-the-phones)).
+  Press ↻; if it stays, stop the controller.
+- **App slow.** The phone takes 250 ms longer to answer than a fresh app. An app
+  in that state drops frames while recording, and only quitting and relaunching
+  Blackmagic Camera on the phone clears it. The line stays while it lasts. From
+  100 ms the answer time under the camera's name turns amber.
+
+### Dumping every camera's settings
+
+A preset is a JSON file of the app's whole configuration, so saving the current
+settings as a preset and downloading it is a snapshot of the phone as it is now:
+
+    python3 tools/dump_settings.py                    # the cameras in cameras.json
+    python3 tools/dump_settings.py 192.168.1.20 ...   # given addresses
+
+writes one folder per camera (snapshot + the presets stored on the phone) and a
+`compare.txt` listing the settings that differ between the cameras. The snapshot
+preset is removed from the phone afterwards (`--keep` leaves it).
+
 ## 4. Using the UI
 
 - **Arm** (checkbox on each row): only armed cameras receive global values and REC ALL.
+  An unarmed camera is otherwise treated like any other: listened to (or
+  polled), its answers timed, its held values put back.
+- Under each camera's name: its address and the time it takes to answer, in
+  milliseconds (amber when it slows down). The **Link** line of the expanded row
+  says since when the controller has been listening to the camera's events, how
+  often that was interrupted, and how many requests it has sent the camera.
 - Each value field takes typing + Enter, ↑/↓ to step (Shift ×10), or the ▾ list of values the camera reports as supported.
 - An amber value is still being sent. If the camera rejects it, the field reverts and the error shows under the camera name.
 - An out-of-range value is replaced by the closest one the camera can take: White Balance, Tint, Iris and Reel are clamped to the camera's range (2000 K becomes 2500 K on an iPhone), while ISO, Shutter, FPS and Lens pick the nearest value the camera lists (ISO 3000 becomes 3200, 30 mm picks the 24 mm lens). The field shows the value that was sent. In the global row each camera gets the closest value for itself.
@@ -123,10 +174,10 @@ too (System Settings > General > Date & Time > Set time automatically).
   - **ISO, Shutter, Iris** turn the app's auto exposure off.
   - **Lens** turns automatic lens switching off, on phones that have it.
   - **White Balance, Tint**: the API has no auto-WB switch, so the controller
-    holds the value (a mark on the field's left edge) and puts it back if the
-    phone changes it, within about 3 seconds. **Auto white balance** (⋯ menu, or
-    AWB in the global row) or applying a preset releases the hold. The hold is
-    saved in `cameras.json`.
+    holds the value (a mark on the field's left edge) and puts it back as soon
+    as the phone reports a change, at most once every 3 seconds. **Auto white
+    balance** (⋯ menu, or AWB in the global row) or applying a preset releases
+    the hold. The hold is saved in `cameras.json`.
 - **▶** before a camera's name expands its row with focus controls (the
   browser remembers which rows are open):
   - **Focus** slider, 0–100 % on the phone's own scale. Moving it turns
@@ -134,12 +185,12 @@ too (System Settings > General > Date & Time > Set time automatically).
   - **Autofocus** switch (continuous on/off) and **Focus once**.
   - **Lock focus**: turns autofocus off, refuses every focus change from here,
     and holds the focus position: if anything on the phone moves it (tap to
-    focus, an autofocus pass), the controller puts it back within half a
-    second. The app's own focus lock isn't in its API, so the controller
-    holds it, saved in `cameras.json`. A tap still makes the phone refocus for
-    about a second before it's put back: to stop that, also press the lock
-    under the focus slider in the app. The slider here keeps working while
-    the app's lock is on.
+    focus, an autofocus pass), the controller puts it back as soon as the
+    phone reports the move. The app's own focus lock isn't in its API, so the
+    controller holds it, saved in `cameras.json`. A tap still makes the phone
+    refocus for about a second before it's put back: to stop that, also press
+    the lock under the focus slider in the app. The slider here keeps working
+    while the app's lock is on.
   - **Presets**: the camera's presets (active one marked), with **⬇ Download**
     (saves the `.cset` file), **Apply**, **Delete**, **Save current…** (saves
     the camera's current settings as a new preset) and **⬆ Upload…**
@@ -154,31 +205,76 @@ too (System Settings > General > Date & Time > Set time automatically).
     controller applies a copy of the phone's current settings with that one
     option changed, through a temporary preset it deletes straight after.
     Not possible while recording.
-- **↻** reconnects a camera from scratch.
+- **↻** reconnects a camera from scratch and reads all its settings again.
 - Cameras are listed by camera letter (A, B, C…), here and in Multiview. Cameras whose letter isn't known yet (connecting, offline) come last.
 - **⋯** menu: auto white balance, open/stop live view, reconnect, remove.
 
-## How the panel stays up to date
+## How it talks to the phones
 
-The Blackmagic Camera app can push its changes: the controller opens one
-WebSocket to each phone (`/control/api/v1/event/websocket`), subscribes to
-everything the panel shows, and the phone sends a message whenever a value
-changes, whether it was changed from here or on the phone itself. Writes still
-go through ordinary PUT/POST requests.
+Blackmagic Camera for iOS 3.5 slows down when its REST API is used while no
+client is connected to its event WebSocket
+(`/control/api/v1/event/websocket`). Each request is then followed by a pass
+over the app's whole state; over hours the app takes longer and longer to
+answer, and once it is slow enough its recordings drop frames. Nothing in the
+API says so, a pause does not undo it, and only quitting and relaunching the
+app clears it. With a client connected to the WebSocket from the start, none
+of this was seen (builds 3.5.200045 and 3.5.300023, iPhone 17 Pro and 18 Pro;
+a later build may behave differently).
 
-- **Requests**: about 0.2 a second per phone (the autofocus mode and the phone
-  screen's LUT switch, which the app can't push, read every 10 s), instead of
-  about 11 when polling. On connecting, and after a format change, the
-  controller also reads the phone's capabilities once (about 40 requests).
-- **Speed**: changes show up within a fraction of a second. While recording,
-  the phone pushes the timecode on every frame.
-- **Falling back**: if the push channel drops (the app goes to the background,
-  the phone dies or leaves the network), the controller polls again, shows the
-  phone offline within a couple of seconds, and subscribes again once it's back.
-  A phone or app version without the push channel is simply polled, as before.
+The controller is built around that:
 
-The expanded row's Device line says which a phone is on: "changes pushed by the
-camera" or "polled".
+1. **It listens first.** The event channel is opened before a phone is sent
+   anything, and kept open. If it drops, it is reopened at once and the
+   interruption is logged.
+2. **It does not poll a phone it can listen to.** Tally, timecode and settings
+   come from the phone's events. Settings are read once when the channel
+   opens, then only on demand: after a command, when a row is expanded
+   (autofocus and the screen's LUT have no event), after a format change.
+3. **One request at a time per phone.** The app serves one request per
+   connection and closes it.
+4. **It times every answer.** Every 30 seconds each camera gets one small
+   read, to measure how long the app takes. That time is shown under the
+   camera's name and drives the *App slow* alarm.
+
+A take is treated like any other moment: with the event channel open, requests
+during recordings did no harm in the long tests. On a phone that something
+else has already slowed they do (one slowed phone lost frames in takes while
+requests kept arriving, and none in a take without any); the *App slow* alarm
+is what tells you about such a phone. `QUIET_DURING_TAKE = True` in
+`python/lucam/manager.py` makes the controller send a recording camera nothing
+but REC and STOP.
+
+**When there is no event channel, the controller polls**, about 11 requests a
+second, as it did before it could listen:
+
+- A camera that has none (another Blackmagic camera, an older app) is polled
+  and its row says **POLLED** in amber under the camera's name.
+- A phone whose channel drops is polled from one second after the drop until
+  the channel is back, which normally takes a second or two. If the phone
+  stops answering, the controller waits for the channel, so that the listener
+  is there first when the phone returns.
+- A phone that has the channel and stays polled for 10 seconds raises the
+  *Polled, not listened to* alarm: on Blackmagic Camera 3.5 this is the state
+  that must not last.
+
+What this does not cover: any other client that sends requests to a phone
+while nothing listens to it has the same effect, whatever LUCam does. LUCam's
+listener protects the phone for as long as LUCam runs and is connected to it.
+
+### Before a shoot
+
+- Quit and relaunch Blackmagic Camera on every phone before each recording
+  block, and after any stretch during which a phone may have been sent requests
+  with nothing listening. Then check its timecode source.
+- Start LUCam before anything else that talks to the phones, and leave it
+  running.
+- On unattended phones, set the app to stop recording on a dropped frame: the
+  *Stopped by the camera* alarm then tells you at once.
+- Soak test, on one phone of each model, with the accessories and settings of
+  the shoot: relaunch the app, run LUCam for the length of the day, record 30
+  seconds every hour. The answer time under the camera's name must stay flat;
+  started with `--log`, the controller keeps the figures in
+  `logs/*.requests.csv`.
 
 ## Network interfaces
 
@@ -286,9 +382,21 @@ python3 server.py --config /tmp/test-cameras.json --open
 
 The first command starts three simulated cameras (registered with Bonjour). The
 second runs the controller with a separate camera list. Then add the mocks
-through Discover. The mocks don't stream video. They push their changes like
-the app does; `--no-events` makes them behave like an app without the push
-channel, so the controller polls them.
+through Discover. The mocks don't stream video.
+
+Like the app, a mock pushes its changes over the event WebSocket
+(`--no-events` makes cameras without one). It also counts the requests it
+receives and can be told to misbehave: stop recording by itself, answer late,
+ignore a STOP, drop its event channel (`/mock/...`, listed at the top of
+`tools/mock_camera.py`).
+
+```bash
+python3 tests/test_engine.py
+```
+
+checks the controller against such cameras: no request before the event
+channel is open, none on a timer while it is open, polling when there is no
+channel, and each alarm.
 
 ## Notes from real-iPhone testing
 
@@ -296,6 +404,13 @@ Tested on an iPhone 15 Pro with app 3.5.3:
 
 - **Discovery.** Bonjour advertises the API as `_http._tcp`, but the app
   actually serves it over HTTPS, so discovery tries both.
+- **Event channel.** `GET /event/list` gives the 121 properties that can be
+  subscribed to; the controller subscribes to all of them. An event carries the
+  object a GET of the same path returns. The timecode event comes once a second,
+  and on every frame while recording. `/lens/focus/autoFocus` has no event, and
+  the screen's LUT is `/monitoring/Device/displayLUT` over REST but
+  `/monitoring/LCD/displayLUT` in the event list. Start and stop are sent as
+  `POST /transports/0/record` and `/stop`; the `PUT` form is deprecated.
 - **Slate fields.** Camera letter is the slate's `project.camera` field, and
   reel is `clip.reel`.
 - **Lens.** The iPhone app exposes its physical lenses at `/lens/cameras` (not

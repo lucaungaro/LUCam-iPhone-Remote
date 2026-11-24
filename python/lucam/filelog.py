@@ -13,9 +13,9 @@ Two files per run, in the log folder:
                                       answer, and the status
 
 The requests file is for forensics: laid over a clip's timeline it shows what the app asked a
-phone at any moment. The controller sends about 11 requests a second per camera (20 while its
-focus is locked), about 2.5 MB an hour per camera: some 40 MB an hour with 16 cameras. Files older
-than keep_days are deleted when a run starts.
+phone at any moment, and how each phone's answer time moved through the day. Cameras are
+listened to, not polled, so the file stays small: a line per command, plus one timing read per
+armed camera every 30 s. Files older than keep_days are deleted when a run starts.
 
 Times are this Mac's clock, not the phones' timecode: see the README before lining them up with
 clips. Writing is thread-safe; nothing here can raise into the caller (a full disk only stops

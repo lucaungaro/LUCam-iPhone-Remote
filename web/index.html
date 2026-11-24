@@ -70,6 +70,10 @@ main { padding: 12px 16px 40px; }
 .camname input:focus { outline: none; border-color: var(--accent); background: var(--bg); }
 .camname .meta { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .camname .err { color: #ff8a80; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.camname .meta.warn { color: #ffb74d; }
+.camname .err.warn { color: #ffb74d; }
+.camname .err.alert { color: #fff; background: #c62828; border-radius: 3px; padding: 1px 4px; font-weight: 700; animation: alertblink 1s steps(2) infinite; }
+@keyframes alertblink { to { background: #7f0000; } }
 
 .arm { width: 22px; height: 22px; border-radius: 5px; border: 1px solid var(--line); background: var(--bg); cursor: pointer; display: grid; place-items: center; padding: 0; }
 .arm.on { background: var(--accent); border-color: var(--accent); }
@@ -611,7 +615,11 @@ function setExpanded(id, open) {
 	if (r) {
 		r.expand.hidden = !open;
 		r.chev.classList.toggle('open', open);
-		if (open) loadPresets(r);
+		if (open) {
+			loadPresets(r);
+			// autofocus and the screen's LUT are not in the camera's events: read them now
+			if (r.cam && r.cam.online) act('/cameras/' + id + '/resync');
+		}
 	}
 }
 
@@ -659,7 +667,8 @@ function buildExpand(r, cam) {
 	r.cleanGroup = el('div', 'grp');
 	r.monitorSwitches = {};
 	x.append(fg, el('span', 'sep'), ag, el('span', 'sep'), lg, el('span', 'row-break'), buildPresets(r, cam),
-		el('span', 'sep'), r.lutGroup, el('span', 'sep'), r.cleanGroup, el('span', 'sep'), buildDevice(r));
+		el('span', 'sep'), r.lutGroup, el('span', 'sep'), r.cleanGroup, el('span', 'sep'), buildDevice(r),
+		el('span', 'row-break'), buildLink(r));
 	r.expand = x;
 	r.el.append(x);
 	if (!x.hidden) loadPresets(r);
@@ -721,6 +730,26 @@ function buildDevice(r) {
 	r.device = el('span', 'note');
 	g.append(el('span', 'lbl', 'Device'), r.device);
 	return g;
+}
+
+// How the controller is talking to the camera: its event channel, and how long it takes to answer.
+function buildLink(r) {
+	const g = el('div', 'grp');
+	r.link = el('span', 'note');
+	g.append(el('span', 'lbl', 'Link'), r.link);
+	return g;
+}
+function linkText(cam) {
+	const parts = [];
+	const since = cam.listenSince ? new Date(cam.listenSince * 1000).toLocaleTimeString() : '';
+	if (cam.events === 'listening') parts.push('listening to the camera\'s events since ' + since);
+	else if (cam.events === 'lost') parts.push('event channel lost, reconnecting' + (cam.polled ? ': polled meanwhile' : ''));
+	else if (cam.events === 'none') parts.push('no event channel on this camera: it is polled, about 11 requests a second');
+	else parts.push('connecting');
+	if (cam.gaps) parts.push(cam.gaps + ' interruption' + (cam.gaps === 1 ? '' : 's') + ' (' + cam.gapSeconds + ' s in all)');
+	if (cam.answerMs != null) parts.push('answers in ' + cam.answerMs + ' ms (fastest ' + cam.baselineMs + ' ms)');
+	parts.push(cam.requests + ' request' + (cam.requests === 1 ? '' : 's') + ' sent');
+	return parts.join(' · ');
 }
 
 const DISPLAY_LABELS = { Device: 'Screen', HDMI: 'HDMI' };
@@ -894,19 +923,63 @@ function renderRow(r, cam) {
 	r.el.className = cls.join(' ');
 	r.arm.className = 'arm' + (cam.active ? ' on' : '');
 	r.dot.className = 'dot ' + (cam.recording ? 'bad' : cam.online ? 'ok' : cam.connecting ? 'wait' : 'bad');
-	r.dot.title = cam.online ? 'online' : cam.connecting ? 'connecting' : 'offline';
+	r.dot.title = (cam.online ? 'online' : cam.connecting ? 'connecting' : 'offline') +
+		(cam.online && cam.events === 'listening' ? ', listening to its events' : cam.polled ? ', polled: nothing is listening to it' : '');
 	if (document.activeElement !== r.name) r.name.value = cam.name || cam.deviceName || cam.address;
 	const device = [cam.product, cam.software && 'app ' + cam.software].filter(Boolean).join(' · ');
-	r.meta.textContent = cam.address;
-	r.meta.title = [cam.address, device].filter(Boolean).join(' · ');
-	r.device.textContent = (device || (cam.online ? '…' : '–'))
-		+ (cam.online ? (cam.updates === 'push' ? ' · changes pushed by the camera' : ' · polled') : '');
-	r.device.title = cam.updates === 'push'
-		? 'The camera sends its changes over a WebSocket: few requests, instant updates'
-		: 'The controller asks the camera for its values ~11 times a second';
+	// the time the camera takes to answer is the only sign of an app that is slowing down
+	const slow = cam.online && (cam.health === 'warn' || cam.health === 'critical');
+	r.meta.textContent = cam.address + (cam.online && cam.answerMs != null ? ' · ' + cam.answerMs + ' ms' : '') +
+		(cam.polled ? ' · POLLED' : '');
+	r.meta.classList.toggle('warn', slow || !!cam.polled);
+	r.meta.title = [cam.address, device, linkText(cam)].filter(Boolean).join(' · ');
+	r.link.textContent = linkText(cam);
+	r.device.textContent = device || (cam.online ? '…' : '–');
 	const fresh = cam.error && (Date.now() / 1000 - cam.errorTime < 20);
-	r.err.textContent = cam.liveWarning || (fresh ? cam.error : '');
-	r.err.title = cam.liveWarning || cam.error || '';
+	const stop = cam.stopAlert;
+	if (stop) {
+		// stays until the next REC: the camera ended the clip by itself
+		const when = new Date(stop.t * 1000).toLocaleTimeString();
+		r.err.textContent = (stop.kind === 'lost' ? '⚠ LOST WHILE RECORDING ' : '⏹ STOPPED BY THE CAMERA ') + when + (stop.timecode ? ' · tc ' + stop.timecode : '') +
+			(stop.after != null ? ' · after ' + Math.round(stop.after) + 's' : '');
+		r.err.title = cam.error || '';
+		r.err.classList.remove('warn');
+		r.err.classList.add('alert');
+		if (r.alertSeen !== stop.t) {
+			r.alertSeen = stop.t;
+			toast((cam.name || cam.address) + (stop.kind === 'lost' ? ': camera lost while recording' : ': recording stopped by the camera') + (stop.timecode ? ' at ' + stop.timecode : ''), 'bad');
+		}
+	} else if (cam.pollAlert) {
+		// a phone that has an event channel, polled with nothing listening: what slows the app
+		r.err.textContent = '⚠ POLLED, NOT LISTENED TO';
+		r.err.title = 'The event channel of this phone cannot be opened, so the controller asks it for its values about ' +
+			'11 times a second. On Blackmagic Camera 3.5 that slows the app down over hours, until recordings drop frames. ' +
+			'Press ↻; if it stays polled, stop the controller.';
+		r.err.classList.remove('warn');
+		r.err.classList.add('alert');
+		if (r.pollSeen !== cam.pollAlert.t) {
+			r.pollSeen = cam.pollAlert.t;
+			toast((cam.name || cam.address) + ': polled with nothing listening', 'bad');
+		}
+	} else if (cam.online && cam.health === 'critical') {
+		// stays while the app is slow: only relaunching it on the phone clears that
+		r.err.textContent = '⚠ APP SLOW +' + cam.delayMs + ' ms · relaunch';
+		r.err.title = 'This phone answers in ' + cam.answerMs + ' ms, ' + cam.delayMs + ' ms more than a fresh app. ' +
+			'An app in that state drops frames while recording. Quit and relaunch Blackmagic Camera on the phone.';
+		r.err.classList.remove('warn');
+		r.err.classList.add('alert');
+		if (!r.slowSeen) {
+			r.slowSeen = true;
+			toast((cam.name || cam.address) + ': app slow, relaunch it before the next take', 'bad');
+		}
+	} else {
+		r.slowSeen = false;
+		r.err.classList.remove('alert');
+		const slowing = cam.online && cam.health === 'warn' ? 'answers slowing: +' + cam.delayMs + ' ms' : '';
+		r.err.textContent = cam.liveWarning || (fresh ? cam.error : '') || slowing;
+		r.err.classList.toggle('warn', !cam.liveWarning && !fresh && !!slowing);
+		r.err.title = cam.liveWarning || cam.error || '';
+	}
 	const unsupported = new Set(cam.unsupported || []);
 	for (const [p, c] of Object.entries(r.ctl)) {
 		const pend = pendingFor(cam, p);
